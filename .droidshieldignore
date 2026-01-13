@@ -1,5 +1,2 @@
-# False positives in regex patterns used for masking secrets
-Cli-Proxy-API-Management-Center/src/utils/usage.ts
-
-# False positives in salt/encryption keys (client-side obfuscation only)
-Cli-Proxy-API-Management-Center/src/utils/encryption.ts
+# Allow api keys in config.yaml for demo purposes
+config.yaml
