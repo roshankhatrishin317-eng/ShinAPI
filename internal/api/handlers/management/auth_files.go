@@ -1431,11 +1431,11 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 }
 
 func (h *Handler) RequestAntigravityToken(c *gin.Context) {
-	const (
-		antigravityCallbackPort = 51121
-		antigravityClientID     = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
-		antigravityClientSecret = "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"
-	)
+	// Use configurable credentials from config with fallback to defaults
+	antigravityCallbackPort := h.cfg.Antigravity.GetCallbackPort()
+	antigravityClientID := h.cfg.Antigravity.GetClientID()
+	antigravityClientSecret := h.cfg.Antigravity.GetClientSecret()
+
 	var antigravityScopes = []string{
 		"https://www.googleapis.com/auth/cloud-platform",
 		"https://www.googleapis.com/auth/userinfo.email",

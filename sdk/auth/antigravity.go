@@ -19,12 +19,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const (
-	antigravityClientID     = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
-	antigravityClientSecret = "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"
-	antigravityCallbackPort = 51121
-)
-
 var antigravityScopes = []string{
 	"https://www.googleapis.com/auth/cloud-platform",
 	"https://www.googleapis.com/auth/userinfo.email",
@@ -67,7 +61,7 @@ func (AntigravityAuthenticator) Login(ctx context.Context, cfg *config.Config, o
 		return nil, fmt.Errorf("antigravity: failed to generate state: %w", err)
 	}
 
-	srv, port, cbChan, errServer := startAntigravityCallbackServer()
+	srv, port, cbChan, errServer := startAntigravityCallbackServer(cfg)
 	if errServer != nil {
 		return nil, fmt.Errorf("antigravity: failed to start callback server: %w", errServer)
 	}
@@ -78,7 +72,7 @@ func (AntigravityAuthenticator) Login(ctx context.Context, cfg *config.Config, o
 	}()
 
 	redirectURI := fmt.Sprintf("http://localhost:%d/oauth-callback", port)
-	authURL := buildAntigravityAuthURL(redirectURI, state)
+	authURL := buildAntigravityAuthURL(cfg, redirectURI, state)
 
 	if !opts.NoBrowser {
 		fmt.Println("Opening browser for antigravity authentication")
@@ -159,7 +153,7 @@ waitForCallback:
 		return nil, fmt.Errorf("antigravity: missing authorization code")
 	}
 
-	tokenResp, errToken := exchangeAntigravityCode(ctx, cbRes.Code, redirectURI, httpClient)
+	tokenResp, errToken := exchangeAntigravityCode(ctx, cfg, cbRes.Code, redirectURI, httpClient)
 	if errToken != nil {
 		return nil, fmt.Errorf("antigravity: token exchange failed: %w", errToken)
 	}
@@ -224,8 +218,9 @@ type callbackResult struct {
 	State string
 }
 
-func startAntigravityCallbackServer() (*http.Server, int, <-chan callbackResult, error) {
-	addr := fmt.Sprintf(":%d", antigravityCallbackPort)
+func startAntigravityCallbackServer(cfg *config.Config) (*http.Server, int, <-chan callbackResult, error) {
+	callbackPort := cfg.Antigravity.GetCallbackPort()
+	addr := fmt.Sprintf(":%d", callbackPort)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, 0, nil, err
@@ -266,11 +261,14 @@ type antigravityTokenResponse struct {
 	TokenType    string `json:"token_type"`
 }
 
-func exchangeAntigravityCode(ctx context.Context, code, redirectURI string, httpClient *http.Client) (*antigravityTokenResponse, error) {
+func exchangeAntigravityCode(ctx context.Context, cfg *config.Config, code, redirectURI string, httpClient *http.Client) (*antigravityTokenResponse, error) {
+	clientID := cfg.Antigravity.GetClientID()
+	clientSecret := cfg.Antigravity.GetClientSecret()
+
 	data := url.Values{}
 	data.Set("code", code)
-	data.Set("client_id", antigravityClientID)
-	data.Set("client_secret", antigravityClientSecret)
+	data.Set("client_id", clientID)
+	data.Set("client_secret", clientSecret)
 	data.Set("redirect_uri", redirectURI)
 	data.Set("grant_type", "authorization_code")
 
@@ -334,10 +332,12 @@ func fetchAntigravityUserInfo(ctx context.Context, accessToken string, httpClien
 	return &info, nil
 }
 
-func buildAntigravityAuthURL(redirectURI, state string) string {
+func buildAntigravityAuthURL(cfg *config.Config, redirectURI, state string) string {
+	clientID := cfg.Antigravity.GetClientID()
+
 	params := url.Values{}
 	params.Set("access_type", "offline")
-	params.Set("client_id", antigravityClientID)
+	params.Set("client_id", clientID)
 	params.Set("prompt", "consent")
 	params.Set("redirect_uri", redirectURI)
 	params.Set("response_type", "code")

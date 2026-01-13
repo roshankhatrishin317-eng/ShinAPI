@@ -22,8 +22,9 @@ import (
 
 // convertCliResponseToOpenAIChatParams holds parameters for response conversion.
 type convertCliResponseToOpenAIChatParams struct {
-	UnixTimestamp int64
-	FunctionIndex int
+	UnixTimestamp   int64
+	FunctionIndex   int
+	HasFunctionCall bool // Tracks if any function call was seen across streaming chunks
 }
 
 // functionCallIDCounter provides a process-wide unique counter for function call identifiers.
@@ -81,7 +82,8 @@ func ConvertAntigravityResponseToOpenAI(_ context.Context, _ string, originalReq
 
 	// Extract and set the finish reason.
 	if finishReasonResult := gjson.GetBytes(rawJSON, "response.candidates.0.finishReason"); finishReasonResult.Exists() {
-		template, _ = sjson.Set(template, "choices.0.finish_reason", strings.ToLower(finishReasonResult.String()))
+		openAIReason := mapGeminiFinishReasonToOpenAI(finishReasonResult.String())
+		template, _ = sjson.Set(template, "choices.0.finish_reason", openAIReason)
 		template, _ = sjson.Set(template, "choices.0.native_finish_reason", strings.ToLower(finishReasonResult.String()))
 	}
 
@@ -149,6 +151,7 @@ func ConvertAntigravityResponseToOpenAI(_ context.Context, _ string, originalReq
 			} else if functionCallResult.Exists() {
 				// Handle function call content.
 				hasFunctionCall = true
+				(*param).(*convertCliResponseToOpenAIChatParams).HasFunctionCall = true // Track across chunks
 				toolCallsResult := gjson.Get(template, "choices.0.delta.tool_calls")
 				functionCallIndex := (*param).(*convertCliResponseToOpenAIChatParams).FunctionIndex
 				(*param).(*convertCliResponseToOpenAIChatParams).FunctionIndex++
@@ -195,7 +198,8 @@ func ConvertAntigravityResponseToOpenAI(_ context.Context, _ string, originalReq
 		}
 	}
 
-	if hasFunctionCall {
+	// Check for function call in current chunk OR in any previous chunk
+	if hasFunctionCall || (*param).(*convertCliResponseToOpenAIChatParams).HasFunctionCall {
 		template, _ = sjson.Set(template, "choices.0.finish_reason", "tool_calls")
 		template, _ = sjson.Set(template, "choices.0.native_finish_reason", "tool_calls")
 	}
@@ -222,4 +226,24 @@ func ConvertAntigravityResponseToOpenAINonStream(ctx context.Context, modelName 
 		return ConvertGeminiResponseToOpenAINonStream(ctx, modelName, originalRequestRawJSON, requestRawJSON, []byte(responseResult.Raw), param)
 	}
 	return ""
+}
+
+// mapGeminiFinishReasonToOpenAI maps Gemini API finish reasons to OpenAI-compatible values.
+// This ensures consistent finish_reason values for clients expecting OpenAI format.
+//
+// Mappings:
+//   - STOP, FINISH_REASON_UNSPECIFIED, UNKNOWN, MALFORMED_FUNCTION_CALL, empty -> "stop"
+//   - MAX_TOKENS -> "max_tokens"
+//   - SAFETY, RECITATION, BLOCKLIST, PROHIBITED_CONTENT, SPII -> "content_filter"
+func mapGeminiFinishReasonToOpenAI(geminiReason string) string {
+	switch strings.ToUpper(strings.TrimSpace(geminiReason)) {
+	case "STOP", "FINISH_REASON_UNSPECIFIED", "UNKNOWN", "MALFORMED_FUNCTION_CALL", "":
+		return "stop"
+	case "MAX_TOKENS":
+		return "max_tokens"
+	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII":
+		return "content_filter"
+	default:
+		return "stop"
+	}
 }

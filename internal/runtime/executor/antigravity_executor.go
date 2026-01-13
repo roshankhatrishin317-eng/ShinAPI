@@ -41,8 +41,6 @@ const (
 	antigravityStreamPath          = "/v1internal:streamGenerateContent"
 	antigravityGeneratePath        = "/v1internal:generateContent"
 	antigravityModelsPath          = "/v1internal:fetchAvailableModels"
-	antigravityClientID            = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
-	antigravityClientSecret        = "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"
 	defaultAntigravityAgent        = "antigravity/1.104.0 darwin/arm64"
 	antigravityAuthType            = "antigravity"
 	refreshSkew                    = 3000 * time.Second
@@ -140,10 +138,12 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	retryCfg := DefaultRetryConfig()
 
 	var lastStatus int
 	var lastBody []byte
 	var lastErr error
+	var retryAttempt int
 
 	for idx, baseURL := range baseURLs {
 		httpReq, errReq := e.buildRequest(ctx, auth, token, req.Model, translated, false, opts.Alt, baseURL)
@@ -186,16 +186,53 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 			lastStatus = httpResp.StatusCode
 			lastBody = append([]byte(nil), bodyBytes...)
 			lastErr = nil
-			if httpResp.StatusCode == http.StatusTooManyRequests && idx+1 < len(baseURLs) {
-				log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+
+			// Handle rate limiting with proper backoff
+			if httpResp.StatusCode == http.StatusTooManyRequests {
+				var retryAfter *time.Duration
+				if ra, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && ra != nil {
+					retryAfter = ra
+				}
+
+				// Try fallback URL first if available
+				if idx+1 < len(baseURLs) {
+					log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+					continue
+				}
+
+				// No more fallback URLs, apply backoff and retry same URLs if attempts remain
+				if retryAttempt < retryCfg.MaxRetries {
+					delay := CalculateBackoff(retryCfg, retryAttempt, retryAfter)
+					log.Debugf("antigravity executor: rate limited, waiting %v before retry attempt %d", delay, retryAttempt+1)
+					if !SleepWithContext(ctx, delay) {
+						return resp, ctx.Err()
+					}
+					retryAttempt++
+					idx = -1 // Reset to retry from first URL
+					continue
+				}
+
+				sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes), retryAfter: retryAfter}
+				err = sErr
+				return resp, err
+			}
+
+			// For other retryable errors (500, 502, 503, 504), also apply backoff
+			if IsRetryableError(httpResp.StatusCode) && retryAttempt < retryCfg.MaxRetries {
+				delay := CalculateBackoff(retryCfg, retryAttempt, nil)
+				log.Debugf("antigravity executor: retryable error %d, waiting %v before retry attempt %d", httpResp.StatusCode, delay, retryAttempt+1)
+				if !SleepWithContext(ctx, delay) {
+					return resp, ctx.Err()
+				}
+				retryAttempt++
+				if idx+1 < len(baseURLs) {
+					continue // Try next URL
+				}
+				idx = -1 // Reset to retry from first URL
 				continue
 			}
+
 			sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes)}
-			if httpResp.StatusCode == http.StatusTooManyRequests {
-				if retryAfter, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && retryAfter != nil {
-					sErr.retryAfter = retryAfter
-				}
-			}
 			err = sErr
 			return resp, err
 		}
@@ -255,10 +292,12 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	retryCfg := DefaultRetryConfig()
 
 	var lastStatus int
 	var lastBody []byte
 	var lastErr error
+	var retryAttempt int
 
 	for idx, baseURL := range baseURLs {
 		httpReq, errReq := e.buildRequest(ctx, auth, token, req.Model, translated, true, opts.Alt, baseURL)
@@ -313,16 +352,50 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 			lastStatus = httpResp.StatusCode
 			lastBody = append([]byte(nil), bodyBytes...)
 			lastErr = nil
-			if httpResp.StatusCode == http.StatusTooManyRequests && idx+1 < len(baseURLs) {
-				log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+
+			// Handle rate limiting with proper backoff
+			if httpResp.StatusCode == http.StatusTooManyRequests {
+				var retryAfter *time.Duration
+				if ra, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && ra != nil {
+					retryAfter = ra
+				}
+
+				if idx+1 < len(baseURLs) {
+					log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+					continue
+				}
+
+				if retryAttempt < retryCfg.MaxRetries {
+					delay := CalculateBackoff(retryCfg, retryAttempt, retryAfter)
+					log.Debugf("antigravity executor: claude rate limited, waiting %v before retry attempt %d", delay, retryAttempt+1)
+					if !SleepWithContext(ctx, delay) {
+						return resp, ctx.Err()
+					}
+					retryAttempt++
+					idx = -1
+					continue
+				}
+
+				sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes), retryAfter: retryAfter}
+				err = sErr
+				return resp, err
+			}
+
+			if IsRetryableError(httpResp.StatusCode) && retryAttempt < retryCfg.MaxRetries {
+				delay := CalculateBackoff(retryCfg, retryAttempt, nil)
+				log.Debugf("antigravity executor: claude retryable error %d, waiting %v before retry attempt %d", httpResp.StatusCode, delay, retryAttempt+1)
+				if !SleepWithContext(ctx, delay) {
+					return resp, ctx.Err()
+				}
+				retryAttempt++
+				if idx+1 < len(baseURLs) {
+					continue
+				}
+				idx = -1
 				continue
 			}
+
 			sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes)}
-			if httpResp.StatusCode == http.StatusTooManyRequests {
-				if retryAfter, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && retryAfter != nil {
-					sErr.retryAfter = retryAfter
-				}
-			}
 			err = sErr
 			return resp, err
 		}
@@ -619,10 +692,12 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	retryCfg := DefaultRetryConfig()
 
 	var lastStatus int
 	var lastBody []byte
 	var lastErr error
+	var retryAttempt int
 
 	for idx, baseURL := range baseURLs {
 		httpReq, errReq := e.buildRequest(ctx, auth, token, req.Model, translated, true, opts.Alt, baseURL)
@@ -677,23 +752,60 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			lastStatus = httpResp.StatusCode
 			lastBody = append([]byte(nil), bodyBytes...)
 			lastErr = nil
-			if httpResp.StatusCode == http.StatusTooManyRequests && idx+1 < len(baseURLs) {
-				log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+
+			// Handle rate limiting with proper backoff
+			if httpResp.StatusCode == http.StatusTooManyRequests {
+				var retryAfter *time.Duration
+				if ra, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && ra != nil {
+					retryAfter = ra
+				}
+
+				// Try fallback URL first if available
+				if idx+1 < len(baseURLs) {
+					log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+					continue
+				}
+
+				// No more fallback URLs, apply backoff and retry same URLs if attempts remain
+				if retryAttempt < retryCfg.MaxRetries {
+					delay := CalculateBackoff(retryCfg, retryAttempt, retryAfter)
+					log.Debugf("antigravity executor: stream rate limited, waiting %v before retry attempt %d", delay, retryAttempt+1)
+					if !SleepWithContext(ctx, delay) {
+						return nil, ctx.Err()
+					}
+					retryAttempt++
+					idx = -1 // Reset to retry from first URL
+					continue
+				}
+
+				sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes), retryAfter: retryAfter}
+				err = sErr
+				return nil, err
+			}
+
+			// For other retryable errors (500, 502, 503, 504), also apply backoff
+			if IsRetryableError(httpResp.StatusCode) && retryAttempt < retryCfg.MaxRetries {
+				delay := CalculateBackoff(retryCfg, retryAttempt, nil)
+				log.Debugf("antigravity executor: stream retryable error %d, waiting %v before retry attempt %d", httpResp.StatusCode, delay, retryAttempt+1)
+				if !SleepWithContext(ctx, delay) {
+					return nil, ctx.Err()
+				}
+				retryAttempt++
+				if idx+1 < len(baseURLs) {
+					continue // Try next URL
+				}
+				idx = -1 // Reset to retry from first URL
 				continue
 			}
+
 			sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes)}
-			if httpResp.StatusCode == http.StatusTooManyRequests {
-				if retryAfter, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && retryAfter != nil {
-					sErr.retryAfter = retryAfter
-				}
-			}
 			err = sErr
 			return nil, err
 		}
 
 		out := make(chan cliproxyexecutor.StreamChunk)
 		stream = out
-		go func(resp *http.Response) {
+		go func(resp *http.Response, ctx context.Context) {
 			defer close(out)
 			defer func() {
 				if errClose := resp.Body.Close(); errClose != nil {
@@ -704,6 +816,14 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			scanner.Buffer(nil, streamScannerBuffer)
 			var param any
 			for scanner.Scan() {
+				// Check for context cancellation before processing each chunk
+				select {
+				case <-ctx.Done():
+					log.Debugf("antigravity executor: streaming cancelled by context")
+					return
+				default:
+				}
+
 				line := scanner.Bytes()
 				appendAPIResponseChunk(ctx, e.cfg, line)
 
@@ -722,21 +842,35 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 
 				chunks := sdktranslator.TranslateStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), translated, bytes.Clone(payload), &param)
 				for i := range chunks {
-					out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunks[i])}
+					// Check for context cancellation before sending each chunk
+					select {
+					case <-ctx.Done():
+						log.Debugf("antigravity executor: streaming cancelled by context during send")
+						return
+					case out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunks[i])}:
+					}
 				}
 			}
 			tail := sdktranslator.TranslateStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), translated, []byte("[DONE]"), &param)
 			for i := range tail {
-				out <- cliproxyexecutor.StreamChunk{Payload: []byte(tail[i])}
+				select {
+				case <-ctx.Done():
+					return
+				case out <- cliproxyexecutor.StreamChunk{Payload: []byte(tail[i])}:
+				}
 			}
 			if errScan := scanner.Err(); errScan != nil {
 				recordAPIResponseError(ctx, e.cfg, errScan)
 				reporter.publishFailure(ctx)
-				out <- cliproxyexecutor.StreamChunk{Err: errScan}
+				select {
+				case <-ctx.Done():
+					return
+				case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
+				}
 			} else {
 				reporter.ensurePublished(ctx)
 			}
-		}(httpResp)
+		}(httpResp, ctx)
 		return stream, nil
 	}
 
@@ -790,6 +924,7 @@ func (e *AntigravityExecutor) CountTokens(ctx context.Context, auth *cliproxyaut
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	retryCfg := DefaultRetryConfig()
 
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
@@ -801,6 +936,7 @@ func (e *AntigravityExecutor) CountTokens(ctx context.Context, auth *cliproxyaut
 	var lastStatus int
 	var lastBody []byte
 	var lastErr error
+	var retryAttempt int
 
 	for idx, baseURL := range baseURLs {
 		payload := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), false)
@@ -884,16 +1020,49 @@ func (e *AntigravityExecutor) CountTokens(ctx context.Context, auth *cliproxyaut
 		lastStatus = httpResp.StatusCode
 		lastBody = append([]byte(nil), bodyBytes...)
 		lastErr = nil
-		if httpResp.StatusCode == http.StatusTooManyRequests && idx+1 < len(baseURLs) {
-			log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+
+		// Handle rate limiting with proper backoff
+		if httpResp.StatusCode == http.StatusTooManyRequests {
+			var retryAfter *time.Duration
+			if ra, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && ra != nil {
+				retryAfter = ra
+			}
+
+			if idx+1 < len(baseURLs) {
+				log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+				continue
+			}
+
+			if retryAttempt < retryCfg.MaxRetries {
+				delay := CalculateBackoff(retryCfg, retryAttempt, retryAfter)
+				log.Debugf("antigravity executor: token count rate limited, waiting %v before retry attempt %d", delay, retryAttempt+1)
+				if !SleepWithContext(ctx, delay) {
+					return cliproxyexecutor.Response{}, ctx.Err()
+				}
+				retryAttempt++
+				idx = -1
+				continue
+			}
+
+			sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes), retryAfter: retryAfter}
+			return cliproxyexecutor.Response{}, sErr
+		}
+
+		if IsRetryableError(httpResp.StatusCode) && retryAttempt < retryCfg.MaxRetries {
+			delay := CalculateBackoff(retryCfg, retryAttempt, nil)
+			log.Debugf("antigravity executor: token count retryable error %d, waiting %v before retry attempt %d", httpResp.StatusCode, delay, retryAttempt+1)
+			if !SleepWithContext(ctx, delay) {
+				return cliproxyexecutor.Response{}, ctx.Err()
+			}
+			retryAttempt++
+			if idx+1 < len(baseURLs) {
+				continue
+			}
+			idx = -1
 			continue
 		}
+
 		sErr := statusErr{code: httpResp.StatusCode, msg: string(bodyBytes)}
-		if httpResp.StatusCode == http.StatusTooManyRequests {
-			if retryAfter, parseErr := parseRetryDelay(bodyBytes); parseErr == nil && retryAfter != nil {
-				sErr.retryAfter = retryAfter
-			}
-		}
 		return cliproxyexecutor.Response{}, sErr
 	}
 
@@ -926,6 +1095,8 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, cfg, auth, 0)
+	retryCfg := DefaultRetryConfig()
+	var retryAttempt int
 
 	for idx, baseURL := range baseURLs {
 		modelsURL := baseURL + antigravityModelsPath
@@ -964,10 +1135,39 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 			return nil
 		}
 		if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
-			if httpResp.StatusCode == http.StatusTooManyRequests && idx+1 < len(baseURLs) {
-				log.Debugf("antigravity executor: models request rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+			// Handle rate limiting with proper backoff
+			if httpResp.StatusCode == http.StatusTooManyRequests {
+				if idx+1 < len(baseURLs) {
+					log.Debugf("antigravity executor: models request rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+					continue
+				}
+
+				if retryAttempt < retryCfg.MaxRetries {
+					delay := CalculateBackoff(retryCfg, retryAttempt, nil)
+					log.Debugf("antigravity executor: models request rate limited, waiting %v before retry attempt %d", delay, retryAttempt+1)
+					if !SleepWithContext(ctx, delay) {
+						return nil
+					}
+					retryAttempt++
+					idx = -1
+					continue
+				}
+			}
+
+			if IsRetryableError(httpResp.StatusCode) && retryAttempt < retryCfg.MaxRetries {
+				delay := CalculateBackoff(retryCfg, retryAttempt, nil)
+				log.Debugf("antigravity executor: models request retryable error %d, waiting %v before retry attempt %d", httpResp.StatusCode, delay, retryAttempt+1)
+				if !SleepWithContext(ctx, delay) {
+					return nil
+				}
+				retryAttempt++
+				if idx+1 < len(baseURLs) {
+					continue
+				}
+				idx = -1
 				continue
 			}
+
 			return nil
 		}
 
@@ -1046,9 +1246,13 @@ func (e *AntigravityExecutor) refreshToken(ctx context.Context, auth *cliproxyau
 		return auth, statusErr{code: http.StatusUnauthorized, msg: "missing refresh token"}
 	}
 
+	// Use configurable credentials with fallback to defaults
+	clientID := e.cfg.Antigravity.GetClientID()
+	clientSecret := e.cfg.Antigravity.GetClientSecret()
+
 	form := url.Values{}
-	form.Set("client_id", antigravityClientID)
-	form.Set("client_secret", antigravityClientSecret)
+	form.Set("client_id", clientID)
+	form.Set("client_secret", clientSecret)
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", refreshToken)
 

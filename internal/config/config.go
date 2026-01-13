@@ -88,6 +88,9 @@ type Config struct {
 	// AmpCode contains Amp CLI upstream configuration, management restrictions, and model mappings.
 	AmpCode AmpCode `yaml:"ampcode" json:"ampcode"`
 
+	// Antigravity contains OAuth credentials and settings for the Antigravity provider.
+	Antigravity AntigravityConfig `yaml:"antigravity,omitempty" json:"antigravity,omitempty"`
+
 	// OAuthExcludedModels defines per-provider global model exclusions applied to OAuth/file-backed auth entries.
 	OAuthExcludedModels map[string][]string `yaml:"oauth-excluded-models,omitempty" json:"oauth-excluded-models,omitempty"`
 
@@ -210,6 +213,63 @@ type AmpUpstreamAPIKeyEntry struct {
 
 	// APIKeys are the client API keys (from top-level api-keys) that map to this upstream key.
 	APIKeys []string `yaml:"api-keys" json:"api-keys"`
+}
+
+// AntigravityConfig contains OAuth credentials and settings for the Antigravity provider.
+// Credentials can be provided via config, or fall back to environment variables
+// ANTIGRAVITY_CLIENT_ID and ANTIGRAVITY_CLIENT_SECRET.
+type AntigravityConfig struct {
+	// ClientID is the OAuth 2.0 client ID for Antigravity authentication.
+	// Falls back to ANTIGRAVITY_CLIENT_ID environment variable if not set.
+	ClientID string `yaml:"client-id,omitempty" json:"client-id,omitempty"`
+
+	// ClientSecret is the OAuth 2.0 client secret for Antigravity authentication.
+	// Falls back to ANTIGRAVITY_CLIENT_SECRET environment variable if not set.
+	ClientSecret string `yaml:"client-secret,omitempty" json:"client-secret,omitempty"`
+
+	// CallbackPort is the local port for OAuth callback server (default: 51121).
+	CallbackPort int `yaml:"callback-port,omitempty" json:"callback-port,omitempty"`
+}
+
+// Default Antigravity OAuth credentials (public client for Gemini CLI).
+// These are provided as defaults but can be overridden via config or environment variables.
+const (
+	DefaultAntigravityClientID     = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+	DefaultAntigravityClientSecret = "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"
+	DefaultAntigravityCallbackPort = 51121
+)
+
+// GetClientID returns the OAuth client ID, checking config, then environment variable,
+// then falling back to the default value.
+func (c *AntigravityConfig) GetClientID() string {
+	if c != nil && c.ClientID != "" {
+		return c.ClientID
+	}
+	if envID := os.Getenv("ANTIGRAVITY_CLIENT_ID"); envID != "" {
+		return envID
+	}
+	return DefaultAntigravityClientID
+}
+
+// GetClientSecret returns the OAuth client secret, checking config, then environment variable,
+// then falling back to the default value.
+func (c *AntigravityConfig) GetClientSecret() string {
+	if c != nil && c.ClientSecret != "" {
+		return c.ClientSecret
+	}
+	if envSecret := os.Getenv("ANTIGRAVITY_CLIENT_SECRET"); envSecret != "" {
+		return envSecret
+	}
+	return DefaultAntigravityClientSecret
+}
+
+// GetCallbackPort returns the OAuth callback port, checking config,
+// then falling back to the default value.
+func (c *AntigravityConfig) GetCallbackPort() int {
+	if c != nil && c.CallbackPort > 0 {
+		return c.CallbackPort
+	}
+	return DefaultAntigravityCallbackPort
 }
 
 // PayloadConfig defines default and override parameter rules applied to provider payloads.
