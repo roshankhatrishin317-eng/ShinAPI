@@ -25,8 +25,10 @@ export function formatUsd(value: number): string {
 // Minimal stubs for other functions to allow compilation if imported elsewhere
 export function collectUsageDetails(usageData: any): any[] { return []; }
 export function extractTotalTokens(detail: any): number { return 0; }
-export function calculateTokenBreakdown(usageData: any): any { return {}; }
-export function calculateRecentPerMinuteRates(windowMinutes: number = 30, usageData: any): any { return {}; }
+export function calculateTokenBreakdown(usageData: any): any { return { cachedTokens: 0, reasoningTokens: 0 }; }
+export function calculateRecentPerMinuteRates(windowMinutes: number = 30, usageData: any): any { 
+  return { rpm: 0, tpm: 0, windowMinutes: 30, requestCount: 0, tokenCount: 0 }; 
+}
 export function getModelNamesFromUsage(usageData: any): string[] { return []; }
 export function calculateCost(detail: any, modelPrices: any): number { return 0; }
 export function calculateTotalCost(usageData: any, modelPrices: any): number { return 0; }

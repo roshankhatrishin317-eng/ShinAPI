@@ -101,7 +101,7 @@ export function StatCards({ usage, loading, modelPrices, sparklines }: StatCards
       value: loading ? '-' : formatPerMinuteValue(rateStats.rpm),
       meta: (
         <span className={styles.statMetaItem}>
-          Req: {loading ? '-' : rateStats.requestCount.toLocaleString()}
+          Req: {loading ? '-' : (rateStats.requestCount ?? 0).toLocaleString()}
         </span>
       ),
       trend: sparklines.rpm
@@ -116,7 +116,7 @@ export function StatCards({ usage, loading, modelPrices, sparklines }: StatCards
       value: loading ? '-' : formatPerMinuteValue(rateStats.tpm),
       meta: (
         <span className={styles.statMetaItem}>
-          Tok: {loading ? '-' : formatTokensInMillions(rateStats.tokenCount)}
+          Tok: {loading ? '-' : formatTokensInMillions(rateStats.tokenCount ?? 0)}
         </span>
       ),
       trend: sparklines.tpm
