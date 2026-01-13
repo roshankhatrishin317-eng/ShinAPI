@@ -31,9 +31,9 @@ export function UsageChart({
   const { t } = useTranslation();
 
   return (
-    <Card
-      title={title}
-      extra={
+    <div className={styles.chartWrapper}>
+      <div className={styles.chartControls}>
+        <h3 className={styles.chartTitle}>{title}</h3>
         <div className={styles.periodButtons}>
           <Button
             variant={period === 'hour' ? 'primary' : 'secondary'}
@@ -50,12 +50,12 @@ export function UsageChart({
             {t('usage_stats.by_day')}
           </Button>
         </div>
-      }
-    >
+      </div>
+
       {loading ? (
         <div className={styles.hint}>{t('common.loading')}</div>
       ) : chartData.labels.length > 0 ? (
-        <div className={styles.chartWrapper}>
+        <>
           <div className={styles.chartLegend} aria-label="Chart legend">
             {chartData.datasets.map((dataset, index) => (
               <div
@@ -82,10 +82,10 @@ export function UsageChart({
               </div>
             </div>
           </div>
-        </div>
+        </>
       ) : (
         <div className={styles.hint}>{emptyText}</div>
       )}
-    </Card>
+    </div>
   );
 }

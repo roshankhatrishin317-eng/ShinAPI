@@ -64,11 +64,11 @@ export function StatCards({ usage, loading, modelPrices, sparklines }: StatCards
         <>
           <span className={styles.statMetaItem}>
             <span className={styles.statMetaDot} style={{ backgroundColor: '#10b981' }} />
-            {t('usage_stats.success_requests')}: {loading ? '-' : (usage?.success_count ?? 0)}
+            {loading ? '-' : (usage?.success_count ?? 0)}
           </span>
           <span className={styles.statMetaItem}>
             <span className={styles.statMetaDot} style={{ backgroundColor: '#ef4444' }} />
-            {t('usage_stats.failed_requests')}: {loading ? '-' : (usage?.failure_count ?? 0)}
+            {loading ? '-' : (usage?.failure_count ?? 0)}
           </span>
         </>
       ),
@@ -85,10 +85,7 @@ export function StatCards({ usage, loading, modelPrices, sparklines }: StatCards
       meta: (
         <>
           <span className={styles.statMetaItem}>
-            {t('usage_stats.cached_tokens')}: {loading ? '-' : formatTokensInMillions(tokenBreakdown.cachedTokens)}
-          </span>
-          <span className={styles.statMetaItem}>
-            {t('usage_stats.reasoning_tokens')}: {loading ? '-' : formatTokensInMillions(tokenBreakdown.reasoningTokens)}
+            Cache: {loading ? '-' : formatTokensInMillions(tokenBreakdown.cachedTokens)}
           </span>
         </>
       ),
@@ -104,7 +101,7 @@ export function StatCards({ usage, loading, modelPrices, sparklines }: StatCards
       value: loading ? '-' : formatPerMinuteValue(rateStats.rpm),
       meta: (
         <span className={styles.statMetaItem}>
-          {t('usage_stats.total_requests')}: {loading ? '-' : rateStats.requestCount.toLocaleString()}
+          Req: {loading ? '-' : rateStats.requestCount.toLocaleString()}
         </span>
       ),
       trend: sparklines.rpm
@@ -119,7 +116,7 @@ export function StatCards({ usage, loading, modelPrices, sparklines }: StatCards
       value: loading ? '-' : formatPerMinuteValue(rateStats.tpm),
       meta: (
         <span className={styles.statMetaItem}>
-          {t('usage_stats.total_tokens')}: {loading ? '-' : formatTokensInMillions(rateStats.tokenCount)}
+          Tok: {loading ? '-' : formatTokensInMillions(rateStats.tokenCount)}
         </span>
       ),
       trend: sparklines.tpm
@@ -134,9 +131,6 @@ export function StatCards({ usage, loading, modelPrices, sparklines }: StatCards
       value: loading ? '-' : hasPrices ? formatUsd(totalCost) : '--',
       meta: (
         <>
-          <span className={styles.statMetaItem}>
-            {t('usage_stats.total_tokens')}: {loading ? '-' : formatTokensInMillions(usage?.total_tokens ?? 0)}
-          </span>
           {!hasPrices && (
             <span className={`${styles.statMetaItem} ${styles.statSubtle}`}>
               {t('usage_stats.cost_need_price')}
@@ -169,7 +163,7 @@ export function StatCards({ usage, loading, modelPrices, sparklines }: StatCards
             <span className={styles.statIconBadge}>{card.icon}</span>
           </div>
           <div className={styles.statValue}>{card.value}</div>
-          {card.meta && <div className={styles.statMetaRow}>{card.meta}</div>}
+          {card.meta && <div className={styles.statMeta}>{card.meta}</div>}
           <div className={styles.statTrend}>
             {card.trend ? (
               <Line className={styles.sparkline} data={card.trend.data} options={sparklineOptions} />
