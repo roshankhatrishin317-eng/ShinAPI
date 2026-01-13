@@ -1,3 +1,4 @@
+@use 'sass:color';
 @use '../styles/variables' as *;
 @use '../styles/mixins' as *;
 
@@ -197,7 +198,7 @@
   place-items: center;
   color: white;
   font-size: 20px;
-  background: linear-gradient(135deg, var(--accent), darken(#3b82f6, 10%));
+  background: linear-gradient(135deg, var(--accent), color.adjust(#3b82f6, $lightness: -10%));
   box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
   transition: transform 0.3s ease;
 
