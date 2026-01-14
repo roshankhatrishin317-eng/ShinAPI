@@ -1,94 +1,123 @@
-# CLI Proxy API
+# CLI Proxy API 🚀
 
-English | [中文](README_CN.md)
+<div align="center">
 
-A powerful, unified proxy server that provides OpenAI, Gemini, Claude, and Codex compatible API interfaces for CLI tools and development environments. It simplifies managing multiple AI provider accounts, load balancing, and authentication through a single endpoint.
+![ShinAPI Logo](https://via.placeholder.com/150x150.png?text=ShinAPI)
 
-![Dashboard Preview](https://via.placeholder.com/1200x600.png?text=ShinAPI+Dashboard+Preview)
+**The Ultimate Unified AI Gateway for CLI Tools & Developers**
 
-## 🌟 Key Features
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Go Report Card](https://goreportcard.com/badge/github.com/router-for-me/CLIProxyAPI)](https://goreportcard.com/report/github.com/router-for-me/CLIProxyAPI)
+[![Docker Pulls](https://img.shields.io/docker/pulls/shinapi/shinapi.svg)](https://hub.docker.com/r/shinapi/shinapi)
 
-*   **Unified API Interface**: Access OpenAI, Gemini, Claude, Codex, Qwen, and iFlow models through a single, standard API endpoint.
-*   **Multi-Provider Support**: Seamlessly integrate with:
-    *   **OpenAI** (GPT-3.5, GPT-4, Codex)
-    *   **Google Gemini** (Pro, Flash, Ultra) & Vertex AI
-    *   **Anthropic Claude** (Sonnet, Opus, Haiku) via OAuth or API Key
-    *   **Alibaba Qwen**
-    *   **iFlow**
-*   **Smart Load Balancing**: Automatically distributes requests across multiple accounts and keys using round-robin or fill-first strategies.
-*   **OAuth Management**: Built-in CLI authentication flows for providers that require OAuth (Gemini, Claude, Codex).
-*   **Web Dashboard**: A modern, Next.js-based dashboard for real-time monitoring, configuration, and auditing.
-*   **Usage Tracking**: Detailed metrics on token usage, request latency, and success rates.
-*   **Amp CLI Integration**: Specialized support for [Amp CLI](https://ampcode.com) with model mapping and fallback routing.
-*   **Go SDK**: Embeddable proxy functionality for your own Go applications.
+[English](README.md) | [中文](README_CN.md)
+
+</div>
+
+---
+
+**ShinAPI (CLI Proxy API)** is a high-performance, unified proxy server designed to bridge the gap between various AI providers and your favorite CLI tools. It provides a single, standardized endpoint compatible with **OpenAI**, **Gemini**, **Claude**, and **Codex** protocols, enabling seamless integration, smart load balancing, and centralized management.
+
+Whether you're building AI agents, using coding assistants in your terminal, or developing custom LLM applications, ShinAPI simplifies your infrastructure.
+
+## ✨ Key Features
+
+### 🔌 Multi-Provider Integration
+Unified access to the world's leading AI models through a single API surface:
+-   **OpenAI**: Full support for GPT-3.5, GPT-4, and Codex models.
+-   **Google Gemini**: Seamlessly use Gemini Pro, Flash, and Ultra via AI Studio or Vertex AI.
+-   **Anthropic Claude**: Access the entire Claude 3 family (Opus, Sonnet, Haiku) with both API Key and OAuth support.
+-   **DeepSeek & Qwen**: Integrated support for emerging powerhouses.
+-   **iFlow**: Enterprise-grade model routing.
+
+### ⚖️ Intelligent Load Balancing
+Maximize reliability and throughput with built-in routing strategies:
+-   **Round-Robin**: Distribute traffic evenly across multiple keys and accounts.
+-   **Failover**: Automatically retry requests on backup providers if primary ones fail.
+-   **Rate Limit Handling**: Smartly manage quotas to prevent downtime.
+
+### 🔐 Advanced Authentication
+-   **OAuth Flows**: Built-in CLI commands to easily authenticate with providers like Gemini, Claude, and Codex using OAuth 2.0.
+-   **Centralized Auth**: Manage all your tokens in one secure location.
+
+### 📊 Modern Web Dashboard
+A comprehensive Next.js-based control panel included out-of-the-box:
+-   **Real-time Analytics**: Monitor tokens/second (TPS), latency, and error rates live.
+-   **Health Checks**: Instant visual status of all connected providers.
+-   **Configuration Manager**: Update settings and rotate keys without restarting.
+-   **API Playground**: Test prompts and debug responses directly in your browser.
+
+### 🛠️ Developer Focused
+-   **Amp CLI Support**: Native integration with [Amp CLI](https://ampcode.com) including model mapping (e.g., aliasing `claude-opus` to `gemini-pro`).
+-   **Go SDK**: Import the core proxy logic directly into your Go applications.
+-   **OpenAI Compatible**: Works with *any* tool that accepts an OpenAI-compatible `baseUrl`.
+
+---
 
 ## 🏗️ Architecture
 
+The proxy acts as a translation layer and intelligent router between your client tools and upstream AI providers.
+
 ```mermaid
-graph TD
-    Client[CLI Tools / IDEs] -->|HTTP/WebSocket| LB[Load Balancer / Proxy]
-    LB -->|Auth & Routing| Core[Core Logic]
-    
-    subgraph "Provider Adapters"
-        Core -->|Translate| OpenAI[OpenAI Adapter]
-        Core -->|Translate| Gemini[Gemini Adapter]
-        Core -->|Translate| Claude[Claude Adapter]
-        Core -->|Translate| Codex[Codex Adapter]
+graph LR
+    subgraph Clients
+        Terminal[CLI Tools]
+        IDE[VS Code / Cursor]
+        Agent[AI Agents]
     end
-    
-    subgraph "External Providers"
-        OpenAI -->|API| OpenAI_API[OpenAI API]
-        Gemini -->|API| Google_API[Google AI Studio / Vertex]
-        Claude -->|API| Anthropic_API[Anthropic API]
-        Codex -->|API| Codex_API[OpenAI Codex]
+
+    subgraph "ShinAPI Gateway"
+        LB[Load Balancer]
+        Auth[Auth Manager]
+        Router[Model Router]
+        Translator[Protocol Translator]
     end
-    
-    subgraph "Management & Storage"
-        DB[(Redis / Postgres / File)]
-        Dashboard[Web Dashboard]
-        Config[YAML Config]
+
+    subgraph Providers
+        OpenAI[OpenAI API]
+        Google[Google Vertex/Studio]
+        Anthropic[Anthropic API]
+        Custom[Custom/Local LLMs]
     end
-    
-    Core --> DB
-    Dashboard -->|Mgmt API| Core
-    Core --> Config
+
+    Clients -->|HTTP/WebSocket| LB
+    LB --> Auth
+    Auth --> Router
+    Router --> Translator
+    Translator --> Providers
 ```
 
-## 🚀 Getting Started
+---
 
-### Installation
+## 🚀 Quick Start
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/router-for-me/CLIProxyAPI.git
-    cd CLIProxyAPI
-    ```
+### 1. Installation
 
-2.  **Build the server:**
-    ```bash
-    go build -o cli-proxy-api ./cmd/server
-    ```
+**Using Go (Recommended):**
+```bash
+git clone https://github.com/router-for-me/CLIProxyAPI.git
+cd CLIProxyAPI
+go build -o cli-proxy-api ./cmd/server
+```
 
-3.  **Run the server:**
-    ```bash
-    ./cli-proxy-api
-    ```
-    The server will start on `http://localhost:8317` by default.
+**Using Docker:**
+```bash
+docker run -d -p 8317:8317 -v $(pwd)/config.yaml:/app/config.yaml shinapi/shinapi
+```
 
-### Configuration
+### 2. Configuration
 
-The application uses a `config.yaml` file for configuration. A basic example:
+Create a `config.yaml` file:
 
 ```yaml
 port: 8317
-# Authentication directory for OAuth tokens
 auth-dir: "~/.cli-proxy-api"
 
-# API Keys for client authentication
+# Define your downstream API keys (for your clients)
 api-keys:
-  - "your-client-secret-key"
+  - "sk-my-secret-client-key"
 
-# Provider Configurations
+# Configure Upstream Providers
 gemini-api-key:
   - api-key: "AIzaSy..."
     models:
@@ -99,49 +128,43 @@ claude-api-key:
   - api-key: "sk-ant-..."
 ```
 
-See `config.example.yaml` for a full list of options.
+### 3. Run
 
-## 🖥️ Web Dashboard
+```bash
+./cli-proxy-api
+```
 
-Access the built-in dashboard at **`http://localhost:8317/dashboard`**.
+Your proxy is now live at `http://localhost:8317`! 
+Open `http://localhost:8317/dashboard` to view the dashboard.
 
-Features:
-*   **Live Metrics**: Watch real-time request throughput and latency.
-*   **Provider Health**: Check the status of your connected accounts.
-*   **Audit Logs**: View detailed logs of past requests (if enabled).
-*   **API Playground**: Test your proxy configuration directly from the browser.
-*   **Configuration**: Modify settings and API keys on the fly.
+---
 
-## 🔧 Management API
+## 📚 Documentation
 
-The server exposes a management API at `/v0/management` for programmatic control.
-See [MANAGEMENT_API.md](MANAGEMENT_API.md) for full documentation.
+*   **[SDK Usage Guide](docs/sdk-usage.md)**: Learn how to embed ShinAPI in your Go code.
+*   **[Management API](MANAGEMENT_API.md)**: Automate configuration via HTTP endpoints.
+*   **[Amp CLI Integration](https://help.router-for.me/agent-client/amp-cli.html)**: Setup guide for Amp users.
 
-## 📚 SDK Usage
-
-You can use the core logic of this proxy in your own Go projects.
-Check [docs/sdk-usage.md](docs/sdk-usage.md) for integration guides.
+---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+We love contributions! Whether it's a bug fix, new feature, or documentation improvement:
 
-1.  Fork the repository
-2.  Create your feature branch (`git checkout -b feature/amazing-feature`)
-3.  Commit your changes (`git commit -m 'Add some amazing feature'`)
-4.  Push to the branch (`git push origin feature/amazing-feature`)
-5.  Open a Pull Request
+1.  **Fork** the repository.
+2.  Create a **Feature Branch** (`git checkout -b feature/cool-new-thing`).
+3.  **Commit** your changes.
+4.  **Push** to your branch.
+5.  Open a **Pull Request**.
+
+---
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+ShinAPI is open-source software licensed under the [MIT License](LICENSE).
 
-## 🙏 Sponsors
+---
 
-Special thanks to our sponsors who support the development of this project:
-
-[![z.ai](https://assets.router-for.me/english-4.7.png)](https://z.ai/subscribe?ic=8JVLJQFSKB)
-
-*   **Z.ai**: GLM CODING PLAN for AI coding.
-*   **PackyCode**: Reliable API relay service.
-*   **Cubence**: Efficient API relay provider.
+<div align="center">
+  <sub>Built with ❤️ by the ShinAPI Team. Empowering developers to build the future of AI.</sub>
+</div>
