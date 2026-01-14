@@ -2,160 +2,146 @@
 
 English | [中文](README_CN.md)
 
-A proxy server that provides OpenAI/Gemini/Claude/Codex compatible API interfaces for CLI.
+A powerful, unified proxy server that provides OpenAI, Gemini, Claude, and Codex compatible API interfaces for CLI tools and development environments. It simplifies managing multiple AI provider accounts, load balancing, and authentication through a single endpoint.
 
-It now also supports OpenAI Codex (GPT models) and Claude Code via OAuth.
+![Dashboard Preview](https://via.placeholder.com/1200x600.png?text=ShinAPI+Dashboard+Preview)
 
-So you can use local or multi-account CLI access with OpenAI(include Responses)/Gemini/Claude-compatible clients and SDKs.
+## 🌟 Key Features
 
-## Sponsor
+*   **Unified API Interface**: Access OpenAI, Gemini, Claude, Codex, Qwen, and iFlow models through a single, standard API endpoint.
+*   **Multi-Provider Support**: Seamlessly integrate with:
+    *   **OpenAI** (GPT-3.5, GPT-4, Codex)
+    *   **Google Gemini** (Pro, Flash, Ultra) & Vertex AI
+    *   **Anthropic Claude** (Sonnet, Opus, Haiku) via OAuth or API Key
+    *   **Alibaba Qwen**
+    *   **iFlow**
+*   **Smart Load Balancing**: Automatically distributes requests across multiple accounts and keys using round-robin or fill-first strategies.
+*   **OAuth Management**: Built-in CLI authentication flows for providers that require OAuth (Gemini, Claude, Codex).
+*   **Web Dashboard**: A modern, Next.js-based dashboard for real-time monitoring, configuration, and auditing.
+*   **Usage Tracking**: Detailed metrics on token usage, request latency, and success rates.
+*   **Amp CLI Integration**: Specialized support for [Amp CLI](https://ampcode.com) with model mapping and fallback routing.
+*   **Go SDK**: Embeddable proxy functionality for your own Go applications.
 
-[![z.ai](https://assets.router-for.me/english-4.7.png)](https://z.ai/subscribe?ic=8JVLJQFSKB)
+## 🏗️ Architecture
 
-This project is sponsored by Z.ai, supporting us with their GLM CODING PLAN.
+```mermaid
+graph TD
+    Client[CLI Tools / IDEs] -->|HTTP/WebSocket| LB[Load Balancer / Proxy]
+    LB -->|Auth & Routing| Core[Core Logic]
+    
+    subgraph "Provider Adapters"
+        Core -->|Translate| OpenAI[OpenAI Adapter]
+        Core -->|Translate| Gemini[Gemini Adapter]
+        Core -->|Translate| Claude[Claude Adapter]
+        Core -->|Translate| Codex[Codex Adapter]
+    end
+    
+    subgraph "External Providers"
+        OpenAI -->|API| OpenAI_API[OpenAI API]
+        Gemini -->|API| Google_API[Google AI Studio / Vertex]
+        Claude -->|API| Anthropic_API[Anthropic API]
+        Codex -->|API| Codex_API[OpenAI Codex]
+    end
+    
+    subgraph "Management & Storage"
+        DB[(Redis / Postgres / File)]
+        Dashboard[Web Dashboard]
+        Config[YAML Config]
+    end
+    
+    Core --> DB
+    Dashboard -->|Mgmt API| Core
+    Core --> Config
+```
 
-GLM CODING PLAN is a subscription service designed for AI coding, starting at just $3/month. It provides access to their flagship GLM-4.7 model across 10+ popular AI coding tools (Claude Code, Cline, Roo Code, etc.), offering developers top-tier, fast, and stable coding experiences.
+## 🚀 Getting Started
 
-Get 10% OFF GLM CODING PLAN：https://z.ai/subscribe?ic=8JVLJQFSKB
+### Installation
 
----
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/router-for-me/CLIProxyAPI.git
+    cd CLIProxyAPI
+    ```
 
-<table>
-<tbody>
-<tr>
-<td width="180"><a href="https://www.packyapi.com/register?aff=cliproxyapi"><img src="./assets/packycode.png" alt="PackyCode" width="150"></a></td>
-<td>Thanks to PackyCode for sponsoring this project! PackyCode is a reliable and efficient API relay service provider, offering relay services for Claude Code, Codex, Gemini, and more. PackyCode provides special discounts for our software users: register using <a href="https://www.packyapi.com/register?aff=cliproxyapi">this link</a> and enter the "cliproxyapi" promo code during recharge to get 10% off.</td>
-</tr>
-<tr>
-<td width="180"><a href="https://cubence.com/signup?code=CLIPROXYAPI&source=cpa"><img src="./assets/cubence.png" alt="Cubence" width="150"></a></td>
-<td>Thanks to Cubence for sponsoring this project! Cubence is a reliable and efficient API relay service provider, offering relay services for Claude Code, Codex, Gemini, and more. Cubence provides special discounts for our software users: register using <a href="https://cubence.com/signup?code=CLIPROXYAPI&source=cpa">this link</a> and enter the "CLIPROXYAPI" promo code during recharge to get 10% off.</td>
-</tr>
-</tbody>
-</table>
+2.  **Build the server:**
+    ```bash
+    go build -o cli-proxy-api ./cmd/server
+    ```
 
-## Overview
+3.  **Run the server:**
+    ```bash
+    ./cli-proxy-api
+    ```
+    The server will start on `http://localhost:8317` by default.
 
-- OpenAI/Gemini/Claude compatible API endpoints for CLI models
-- OpenAI Codex support (GPT models) via OAuth login
-- Claude Code support via OAuth login
-- Qwen Code support via OAuth login
-- iFlow support via OAuth login
-- Amp CLI and IDE extensions support with provider routing
-- Streaming and non-streaming responses
-- Function calling/tools support
-- Multimodal input support (text and images)
-- Multiple accounts with round-robin load balancing (Gemini, OpenAI, Claude, Qwen and iFlow)
-- Simple CLI authentication flows (Gemini, OpenAI, Claude, Qwen and iFlow)
-- Generative Language API Key support
-- AI Studio Build multi-account load balancing
-- Gemini CLI multi-account load balancing
-- Claude Code multi-account load balancing
-- Qwen Code multi-account load balancing
-- iFlow multi-account load balancing
-- OpenAI Codex multi-account load balancing
-- OpenAI-compatible upstream providers via config (e.g., OpenRouter)
-- Integrated Web Dashboard for management and monitoring
-- Reusable Go SDK for embedding the proxy (see `docs/sdk-usage.md`)
+### Configuration
 
-## Getting Started
+The application uses a `config.yaml` file for configuration. A basic example:
 
-CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
+```yaml
+port: 8317
+# Authentication directory for OAuth tokens
+auth-dir: "~/.cli-proxy-api"
 
-## Web Dashboard
+# API Keys for client authentication
+api-keys:
+  - "your-client-secret-key"
 
-CLIProxyAPI now comes with a built-in web dashboard for easier management and monitoring.
-Access it at `http://localhost:8317/dashboard` (default port).
+# Provider Configurations
+gemini-api-key:
+  - api-key: "AIzaSy..."
+    models:
+      - name: "gemini-1.5-flash"
+        alias: "flash"
 
-Features include:
-- Real-time usage statistics
-- Provider health monitoring
-- Configuration management
-- API Playground
+claude-api-key:
+  - api-key: "sk-ant-..."
+```
 
-## Management API
+See `config.example.yaml` for a full list of options.
 
-see [MANAGEMENT_API.md](https://help.router-for.me/management/api)
+## 🖥️ Web Dashboard
 
-## Amp CLI Support
+Access the built-in dashboard at **`http://localhost:8317/dashboard`**.
 
-CLIProxyAPI includes integrated support for [Amp CLI](https://ampcode.com) and Amp IDE extensions, enabling you to use your Google/ChatGPT/Claude OAuth subscriptions with Amp's coding tools:
+Features:
+*   **Live Metrics**: Watch real-time request throughput and latency.
+*   **Provider Health**: Check the status of your connected accounts.
+*   **Audit Logs**: View detailed logs of past requests (if enabled).
+*   **API Playground**: Test your proxy configuration directly from the browser.
+*   **Configuration**: Modify settings and API keys on the fly.
 
-- Provider route aliases for Amp's API patterns (`/api/provider/{provider}/v1...`)
-- Management proxy for OAuth authentication and account features
-- Smart model fallback with automatic routing
-- **Model mapping** to route unavailable models to alternatives (e.g., `claude-opus-4.5` → `claude-sonnet-4`)
-- Security-first design with localhost-only management endpoints
+## 🔧 Management API
 
-**→ [Complete Amp CLI Integration Guide](https://help.router-for.me/agent-client/amp-cli.html)**
+The server exposes a management API at `/v0/management` for programmatic control.
+See [MANAGEMENT_API.md](MANAGEMENT_API.md) for full documentation.
 
-## SDK Docs
+## 📚 SDK Usage
 
-- Usage: [docs/sdk-usage.md](docs/sdk-usage.md)
-- Advanced (executors & translators): [docs/sdk-advanced.md](docs/sdk-advanced.md)
-- Access: [docs/sdk-access.md](docs/sdk-access.md)
-- Watcher: [docs/sdk-watcher.md](docs/sdk-watcher.md)
-- Custom Provider Example: `examples/custom-provider`
+You can use the core logic of this proxy in your own Go projects.
+Check [docs/sdk-usage.md](docs/sdk-usage.md) for integration guides.
 
-## Contributing
+## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+1.  Fork the repository
+2.  Create your feature branch (`git checkout -b feature/amazing-feature`)
+3.  Commit your changes (`git commit -m 'Add some amazing feature'`)
+4.  Push to the branch (`git push origin feature/amazing-feature`)
+5.  Open a Pull Request
 
-## Who is with us?
-
-Those projects are based on CLIProxyAPI:
-
-### [vibeproxy](https://github.com/automazeio/vibeproxy)
-
-Native macOS menu bar app to use your Claude Code & ChatGPT subscriptions with AI coding tools - no API keys needed
-
-### [Subtitle Translator](https://github.com/VjayC/SRT-Subtitle-Translator-Validator)
-
-Browser-based tool to translate SRT subtitles using your Gemini subscription via CLIProxyAPI with automatic validation/error correction - no API keys needed
-
-### [CCS (Claude Code Switch)](https://github.com/kaitranntt/ccs)
-
-CLI wrapper for instant switching between multiple Claude accounts and alternative models (Gemini, Codex, Antigravity) via CLIProxyAPI OAuth - no API keys needed
-
-### [ProxyPal](https://github.com/heyhuynhgiabuu/proxypal)
-
-Native macOS GUI for managing CLIProxyAPI: configure providers, model mappings, and endpoints via OAuth - no API keys needed.
-
-### [Quotio](https://github.com/nguyenphutrong/quotio)
-
-Native macOS menu bar app that unifies Claude, Gemini, OpenAI, Qwen, and Antigravity subscriptions with real-time quota tracking and smart auto-failover for AI coding tools like Claude Code, OpenCode, and Droid - no API keys needed.
-
-### [CodMate](https://github.com/loocor/CodMate)
-
-Native macOS SwiftUI app for managing CLI AI sessions (Codex, Claude Code, Gemini CLI) with unified provider management, Git review, project organization, global search, and terminal integration. Integrates CLIProxyAPI to provide OAuth authentication for Codex, Claude, Gemini, Antigravity, and Qwen Code, with built-in and third-party provider rerouting through a single proxy endpoint - no API keys needed for OAuth providers.
-
-### [ProxyPilot](https://github.com/Finesssee/ProxyPilot)
-
-Windows-native CLIProxyAPI fork with TUI, system tray, and multi-provider OAuth for AI coding tools - no API keys needed.
-
-### [Claude Proxy VSCode](https://github.com/uzhao/claude-proxy-vscode)
-
-VSCode extension for quick switching between Claude Code models, featuring integrated CLIProxyAPI as its backend with automatic background lifecycle management.
-
-> [!NOTE]  
-> If you developed a project based on CLIProxyAPI, please open a PR to add it to this list.
-
-## More choices
-
-Those projects are ports of CLIProxyAPI or inspired by it:
-
-### [9Router](https://github.com/decolua/9router)
-
-A Next.js implementation inspired by CLIProxyAPI, easy to install and use, built from scratch with format translation (OpenAI/Claude/Gemini/Ollama), combo system with auto-fallback, multi-account management with exponential backoff, a Next.js web dashboard, and support for CLI tools (Cursor, Claude Code, Cline, RooCode) - no API keys needed.
-
-> [!NOTE]  
-> If you have developed a port of CLIProxyAPI or a project inspired by it, please open a PR to add it to this list.
-
-## License
+## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Sponsors
+
+Special thanks to our sponsors who support the development of this project:
+
+[![z.ai](https://assets.router-for.me/english-4.7.png)](https://z.ai/subscribe?ic=8JVLJQFSKB)
+
+*   **Z.ai**: GLM CODING PLAN for AI coding.
+*   **PackyCode**: Reliable API relay service.
+*   **Cubence**: Efficient API relay provider.
