@@ -1,10 +1,8 @@
 # Binaries
 cli-proxy-api
 *.exe
-
 # Configuration
-config.yaml
-.env
+
 
 # Generated content
 bin/*
@@ -48,3 +46,10 @@ _bmad-output/*
 # macOS
 .DS_Store
 ._*
+
+# Ignored paths
+shinapi
+dashboard/node_modules
+dashboard/.next
+.env
+config.yaml

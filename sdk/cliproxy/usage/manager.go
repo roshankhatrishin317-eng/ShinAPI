@@ -19,6 +19,7 @@ type Record struct {
 	RequestedAt time.Time
 	Failed      bool
 	Detail      Detail
+	LatencyMs   int64
 }
 
 // Detail holds the token usage breakdown.
@@ -139,6 +140,9 @@ func (m *Manager) run(ctx context.Context) {
 }
 
 func (m *Manager) dispatch(item queueItem) {
+	// Invoke metrics hook for real-time tracking
+	invokeMetricsHook(item.record)
+	
 	m.pluginsMu.RLock()
 	plugins := make([]Plugin, len(m.plugins))
 	copy(plugins, m.plugins)
@@ -164,6 +168,33 @@ func safeInvoke(plugin Plugin, ctx context.Context, record Record) {
 }
 
 var defaultManager = NewManager(512)
+
+// MetricsHook is a callback function for real-time metrics tracking.
+// It receives model name, total tokens, latency in ms, and success status.
+type MetricsHook func(model string, tokens int64, latencyMs int64, success bool)
+
+var (
+	metricsHookMu sync.RWMutex
+	metricsHook   MetricsHook
+)
+
+// SetMetricsHook registers a callback for real-time metrics updates.
+// This allows the API layer to receive metrics without import cycles.
+func SetMetricsHook(hook MetricsHook) {
+	metricsHookMu.Lock()
+	metricsHook = hook
+	metricsHookMu.Unlock()
+}
+
+// invokeMetricsHook calls the registered metrics hook if set.
+func invokeMetricsHook(record Record) {
+	metricsHookMu.RLock()
+	hook := metricsHook
+	metricsHookMu.RUnlock()
+	if hook != nil {
+		hook(record.Model, record.Detail.TotalTokens, record.LatencyMs, !record.Failed)
+	}
+}
 
 // DefaultManager returns the global usage manager instance.
 func DefaultManager() *Manager { return defaultManager }

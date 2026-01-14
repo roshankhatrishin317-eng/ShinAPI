@@ -5,6 +5,7 @@ import (
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/claude/gemini-cli"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/claude/openai/chat-completions"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/claude/openai/responses"
+	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/claude/antigravity"
 
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/codex/claude"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/codex/gemini"
@@ -22,12 +23,15 @@ import (
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/gemini/gemini-cli"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/gemini/openai/chat-completions"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/gemini/openai/responses"
+	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/gemini/antigravity"
 
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/openai/claude"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/openai/gemini"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/openai/gemini-cli"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/openai/openai/chat-completions"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/openai/openai/responses"
+	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/openai/antigravity"
+	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/openai-responses/antigravity"
 
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/antigravity/claude"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/antigravity/gemini"

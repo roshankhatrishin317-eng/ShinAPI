@@ -70,8 +70,8 @@ func (r *Registry) TranslateStream(ctx context.Context, from, to Format, model s
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	if byTarget, ok := r.responses[to]; ok {
-		if fn, isOk := byTarget[from]; isOk && fn.Stream != nil {
+	if byTarget, ok := r.responses[from]; ok {
+		if fn, isOk := byTarget[to]; isOk && fn.Stream != nil {
 			return fn.Stream(ctx, model, originalRequestRawJSON, requestRawJSON, rawJSON, param)
 		}
 	}
@@ -83,8 +83,8 @@ func (r *Registry) TranslateNonStream(ctx context.Context, from, to Format, mode
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	if byTarget, ok := r.responses[to]; ok {
-		if fn, isOk := byTarget[from]; isOk && fn.NonStream != nil {
+	if byTarget, ok := r.responses[from]; ok {
+		if fn, isOk := byTarget[to]; isOk && fn.NonStream != nil {
 			return fn.NonStream(ctx, model, originalRequestRawJSON, requestRawJSON, rawJSON, param)
 		}
 	}
@@ -96,8 +96,8 @@ func (r *Registry) TranslateTokenCount(ctx context.Context, from, to Format, cou
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	if byTarget, ok := r.responses[to]; ok {
-		if fn, isOk := byTarget[from]; isOk && fn.TokenCount != nil {
+	if byTarget, ok := r.responses[from]; ok {
+		if fn, isOk := byTarget[to]; isOk && fn.TokenCount != nil {
 			return fn.TokenCount(ctx, count)
 		}
 	}

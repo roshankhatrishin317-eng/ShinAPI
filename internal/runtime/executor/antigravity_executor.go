@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/cache"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
@@ -1084,6 +1085,16 @@ func (e *AntigravityExecutor) CountTokens(ctx context.Context, auth *cliproxyaut
 
 // FetchAntigravityModels retrieves available models using the supplied auth.
 func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *config.Config) []*registry.ModelInfo {
+	// Check cache first
+	authID := ""
+	if auth != nil {
+		authID = auth.ID
+	}
+	if cached := cache.GetModelListCache().Get(authID); cached != nil {
+		log.Debugf("antigravity executor: returning cached models for auth %s", authID)
+		return cached
+	}
+
 	exec := &AntigravityExecutor{cfg: cfg}
 	token, updatedAuth, errToken := exec.ensureAccessToken(ctx, auth)
 	if errToken != nil || token == "" {
@@ -1210,6 +1221,8 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 				models = append(models, modelInfo)
 			}
 		}
+		// Cache the result
+		cache.GetModelListCache().Set(authID, models)
 		return models
 	}
 	return nil

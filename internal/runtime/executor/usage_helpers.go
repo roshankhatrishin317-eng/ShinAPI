@@ -73,6 +73,7 @@ func (r *usageReporter) publishWithOutcome(ctx context.Context, detail usage.Det
 		return
 	}
 	r.once.Do(func() {
+		latencyMs := time.Since(r.requestedAt).Milliseconds()
 		usage.PublishRecord(ctx, usage.Record{
 			Provider:    r.provider,
 			Model:       r.model,
@@ -83,6 +84,7 @@ func (r *usageReporter) publishWithOutcome(ctx context.Context, detail usage.Det
 			RequestedAt: r.requestedAt,
 			Failed:      failed,
 			Detail:      detail,
+			LatencyMs:   latencyMs,
 		})
 	})
 }
@@ -96,6 +98,7 @@ func (r *usageReporter) ensurePublished(ctx context.Context) {
 		return
 	}
 	r.once.Do(func() {
+		latencyMs := time.Since(r.requestedAt).Milliseconds()
 		usage.PublishRecord(ctx, usage.Record{
 			Provider:    r.provider,
 			Model:       r.model,
@@ -106,6 +109,7 @@ func (r *usageReporter) ensurePublished(ctx context.Context) {
 			RequestedAt: r.requestedAt,
 			Failed:      false,
 			Detail:      usage.Detail{},
+			LatencyMs:   latencyMs,
 		})
 	})
 }

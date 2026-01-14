@@ -239,7 +239,7 @@ func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName
 	}
 
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
-	dataChan, errChan := h.ExecuteStreamWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, alt)
+	dataChan, errChan := h.ExecuteStreamWithFanout(cliCtx, h.HandlerType(), modelName, rawJSON, alt)
 
 	setSSEHeaders := func() {
 		c.Header("Content-Type", "text/event-stream")
@@ -382,7 +382,13 @@ func (h *GeminiAPIHandler) forwardGeminiStream(c *gin.Context, flusher http.Flus
 			if alt == "" {
 				_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", string(body))
 			} else {
-				_, _ = c.Writer.Write(body)
+				// In raw mode, we cannot write a JSON error body into the binary/text stream
+				// as it would corrupt the output. Just aborting the connection is safer
+				// so the client detects a network error.
+				// However, if no headers were sent yet (which shouldn't happen here as this is mid-stream),
+				// we could send a status code.
+				// Since we are mid-stream, just return. The cancellation will close the connection.
+				return
 			}
 		},
 	})

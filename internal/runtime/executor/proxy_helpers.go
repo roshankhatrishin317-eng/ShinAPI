@@ -14,10 +14,11 @@ import (
 	"golang.org/x/net/proxy"
 )
 
-// newProxyAwareHTTPClient creates an HTTP client with proper proxy configuration priority:
+// newProxyAwareHTTPClient creates an HTTP client with proper proxy configuration priority
+// and HTTP/2 connection pooling for improved performance.
 // 1. Use auth.ProxyURL if configured (highest priority)
 // 2. Use cfg.ProxyURL if auth proxy is not configured
-// 3. Use RoundTripper from context if neither are configured
+// 3. Use pooled transport for the provider
 //
 // Parameters:
 //   - ctx: The context containing optional RoundTripper
@@ -28,9 +29,10 @@ import (
 // Returns:
 //   - *http.Client: An HTTP client with configured proxy or transport
 func newProxyAwareHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, timeout time.Duration) *http.Client {
-	httpClient := &http.Client{}
-	if timeout > 0 {
-		httpClient.Timeout = timeout
+	// Determine provider key for connection pooling
+	providerKey := "default"
+	if auth != nil && auth.Provider != "" {
+		providerKey = auth.Provider
 	}
 
 	// Priority 1: Use auth.ProxyURL if configured
@@ -44,23 +46,23 @@ func newProxyAwareHTTPClient(ctx context.Context, cfg *config.Config, auth *clip
 		proxyURL = strings.TrimSpace(cfg.ProxyURL)
 	}
 
-	// If we have a proxy URL configured, set up the transport
+	pool := GetHTTPPool()
+
+	// If we have a proxy URL, use pooled proxy transport
 	if proxyURL != "" {
-		transport := buildProxyTransport(proxyURL)
-		if transport != nil {
-			httpClient.Transport = transport
-			return httpClient
-		}
-		// If proxy setup failed, log and fall through to context RoundTripper
-		log.Debugf("failed to setup proxy from URL: %s, falling back to context transport", proxyURL)
+		return pool.GetProxyClient(providerKey, proxyURL, timeout)
 	}
 
-	// Priority 3: Use RoundTripper from context (typically from RoundTripperFor)
+	// Priority 3: Use RoundTripper from context if available
 	if rt, ok := ctx.Value("cliproxy.roundtripper").(http.RoundTripper); ok && rt != nil {
-		httpClient.Transport = rt
+		return &http.Client{
+			Transport: rt,
+			Timeout:   timeout,
+		}
 	}
 
-	return httpClient
+	// Use pooled transport for the provider
+	return pool.GetClient(providerKey, timeout)
 }
 
 // buildProxyTransport creates an HTTP transport configured for the given proxy URL.

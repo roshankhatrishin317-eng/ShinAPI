@@ -18,6 +18,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/circuitbreaker"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	log "github.com/sirupsen/logrus"
 )
@@ -45,14 +46,18 @@ type RefreshEvaluator interface {
 }
 
 const (
-	refreshCheckInterval  = 5 * time.Second
-	refreshPendingBackoff = time.Minute
-	refreshFailureBackoff = 5 * time.Minute
-	quotaBackoffBase      = time.Second
-	quotaBackoffMax       = 30 * time.Minute
+	refreshCheckInterval   = 5 * time.Second
+	refreshPendingBackoff  = time.Minute
+	refreshFailureBackoff  = 5 * time.Minute
+	quotaBackoffBase       = time.Second
+	quotaBackoffMax        = 30 * time.Minute
+	maxConcurrentRefreshes = 10
 )
 
 var quotaCooldownDisabled atomic.Bool
+
+// refreshSemaphore limits concurrent refresh goroutines to prevent thundering herd.
+var refreshSemaphore = make(chan struct{}, maxConcurrentRefreshes)
 
 // SetQuotaCooldownDisabled toggles quota cooldown scheduling globally.
 func SetQuotaCooldownDisabled(disable bool) {
@@ -90,6 +95,21 @@ type Hook interface {
 	OnResult(ctx context.Context, result Result)
 }
 
+// MetricsHook extends Hook with observability callbacks for monitoring.
+type MetricsHook interface {
+	Hook
+	// OnRetry fires when a request retry is attempted.
+	OnRetry(ctx context.Context, provider, model string, attempt int, waitDuration time.Duration, err error)
+	// OnCooldown fires when entering cooldown wait.
+	OnCooldown(ctx context.Context, provider, model string, duration time.Duration)
+	// OnRefreshStart fires when auth refresh begins.
+	OnRefreshStart(ctx context.Context, authID, provider string)
+	// OnRefreshComplete fires when auth refresh completes.
+	OnRefreshComplete(ctx context.Context, authID, provider string, success bool, duration time.Duration)
+	// OnAuthDeleted fires when an auth is removed.
+	OnAuthDeleted(ctx context.Context, auth *Auth)
+}
+
 // NoopHook provides optional hook defaults.
 type NoopHook struct{}
 
@@ -125,6 +145,9 @@ type Manager struct {
 
 	// Auto refresh state
 	refreshCancel context.CancelFunc
+
+	// Circuit breakers per provider:auth:model combination to prevent thundering herd
+	circuitBreakers *circuitbreaker.EndpointBreakers
 }
 
 // NewManager constructs a manager with optional custom selector and hook.
@@ -135,6 +158,12 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 	if hook == nil {
 		hook = NoopHook{}
 	}
+	// Initialize circuit breaker configuration with sensible defaults
+	cbConfig := circuitbreaker.Config{
+		FailureThreshold: 5,               // Open after 5 consecutive failures
+		ResetTimeout:     30 * time.Second, // Try half-open after 30s
+		HalfOpenMax:      2,                // Allow 2 test requests in half-open
+	}
 	return &Manager{
 		store:           store,
 		executors:       make(map[string]ProviderExecutor),
@@ -142,6 +171,7 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 		hook:            hook,
 		auths:           make(map[string]*Auth),
 		providerOffsets: make(map[string]int),
+		circuitBreakers: circuitbreaker.NewEndpointBreakers(cbConfig),
 	}
 }
 
@@ -159,6 +189,9 @@ func (m *Manager) SetSelector(selector Selector) {
 
 // SetStore swaps the underlying persistence store.
 func (m *Manager) SetStore(store Store) {
+	if m == nil {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.store = store
@@ -166,6 +199,9 @@ func (m *Manager) SetStore(store Store) {
 
 // SetRoundTripperProvider register a provider that returns a per-auth RoundTripper.
 func (m *Manager) SetRoundTripperProvider(p RoundTripperProvider) {
+	if m == nil {
+		return
+	}
 	m.mu.Lock()
 	m.rtProvider = p
 	m.mu.Unlock()
@@ -188,7 +224,7 @@ func (m *Manager) SetRetryConfig(retry int, maxRetryInterval time.Duration) {
 
 // RegisterExecutor registers a provider executor with the manager.
 func (m *Manager) RegisterExecutor(executor ProviderExecutor) {
-	if executor == nil {
+	if m == nil || executor == nil {
 		return
 	}
 	m.mu.Lock()
@@ -198,6 +234,9 @@ func (m *Manager) RegisterExecutor(executor ProviderExecutor) {
 
 // UnregisterExecutor removes the executor associated with the provider key.
 func (m *Manager) UnregisterExecutor(provider string) {
+	if m == nil {
+		return
+	}
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if provider == "" {
 		return
@@ -209,7 +248,7 @@ func (m *Manager) UnregisterExecutor(provider string) {
 
 // Register inserts a new auth entry into the manager.
 func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
-	if auth == nil {
+	if m == nil || auth == nil {
 		return nil, nil
 	}
 	if auth.ID == "" {
@@ -226,7 +265,7 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
 
 // Update replaces an existing auth entry and notifies hooks.
 func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
-	if auth == nil || auth.ID == "" {
+	if m == nil || auth == nil || auth.ID == "" {
 		return nil, nil
 	}
 	m.mu.Lock()
@@ -242,8 +281,40 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 	return auth.Clone(), nil
 }
 
+// Delete removes an auth entry from the manager and backing store.
+func (m *Manager) Delete(ctx context.Context, id string) error {
+	if m == nil || id == "" {
+		return nil
+	}
+	m.mu.Lock()
+	auth, exists := m.auths[id]
+	if !exists {
+		m.mu.Unlock()
+		return nil
+	}
+	authClone := auth.Clone()
+	delete(m.auths, id)
+	m.mu.Unlock()
+
+	// Delete from backing store
+	if m.store != nil {
+		if err := m.store.Delete(ctx, id); err != nil {
+			log.Errorf("failed to delete auth %s from store: %v", id, err)
+		}
+	}
+
+	// Emit metrics hook for deletion
+	if mh, ok := m.hook.(MetricsHook); ok {
+		mh.OnAuthDeleted(ctx, authClone)
+	}
+	return nil
+}
+
 // Load resets manager state from the backing store.
 func (m *Manager) Load(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.store == nil {
@@ -267,6 +338,9 @@ func (m *Manager) Load(ctx context.Context) error {
 // Execute performs a non-streaming execution using the configured selector and executor.
 // It supports multiple providers for the same model and round-robins the starting provider per model.
 func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	if m == nil {
+		return cliproxyexecutor.Response{}, &Error{Code: "manager_nil", Message: "manager is nil"}
+	}
 	normalized := m.normalizeProviders(providers)
 	if len(normalized) == 0 {
 		return cliproxyexecutor.Response{}, &Error{Code: "provider_not_found", Message: "no provider supplied"}
@@ -281,6 +355,13 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
+		// Check context cancellation before each attempt
+		select {
+		case <-ctx.Done():
+			return cliproxyexecutor.Response{}, ctx.Err()
+		default:
+		}
+
 		resp, errExec := m.executeProvidersOnce(ctx, rotated, func(execCtx context.Context, provider string) (cliproxyexecutor.Response, error) {
 			return m.executeWithProvider(execCtx, provider, req, opts)
 		})
@@ -291,6 +372,10 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 		wait, shouldRetry := m.shouldRetryAfterError(errExec, attempt, attempts, rotated, req.Model, maxWait)
 		if !shouldRetry {
 			break
+		}
+		// Emit metrics hook for retry
+		if mh, ok := m.hook.(MetricsHook); ok {
+			mh.OnRetry(ctx, rotated[0], req.Model, attempt+1, wait, errExec)
 		}
 		if errWait := waitForCooldown(ctx, wait); errWait != nil {
 			return cliproxyexecutor.Response{}, errWait
@@ -305,6 +390,9 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 // ExecuteCount performs a non-streaming execution using the configured selector and executor.
 // It supports multiple providers for the same model and round-robins the starting provider per model.
 func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	if m == nil {
+		return cliproxyexecutor.Response{}, &Error{Code: "manager_nil", Message: "manager is nil"}
+	}
 	normalized := m.normalizeProviders(providers)
 	if len(normalized) == 0 {
 		return cliproxyexecutor.Response{}, &Error{Code: "provider_not_found", Message: "no provider supplied"}
@@ -319,6 +407,13 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
+		// Check context cancellation before each attempt
+		select {
+		case <-ctx.Done():
+			return cliproxyexecutor.Response{}, ctx.Err()
+		default:
+		}
+
 		resp, errExec := m.executeProvidersOnce(ctx, rotated, func(execCtx context.Context, provider string) (cliproxyexecutor.Response, error) {
 			return m.executeCountWithProvider(execCtx, provider, req, opts)
 		})
@@ -329,6 +424,10 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 		wait, shouldRetry := m.shouldRetryAfterError(errExec, attempt, attempts, rotated, req.Model, maxWait)
 		if !shouldRetry {
 			break
+		}
+		// Emit metrics hook for retry
+		if mh, ok := m.hook.(MetricsHook); ok {
+			mh.OnRetry(ctx, rotated[0], req.Model, attempt+1, wait, errExec)
 		}
 		if errWait := waitForCooldown(ctx, wait); errWait != nil {
 			return cliproxyexecutor.Response{}, errWait
@@ -343,6 +442,9 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 // ExecuteStream performs a streaming execution using the configured selector and executor.
 // It supports multiple providers for the same model and round-robins the starting provider per model.
 func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (<-chan cliproxyexecutor.StreamChunk, error) {
+	if m == nil {
+		return nil, &Error{Code: "manager_nil", Message: "manager is nil"}
+	}
 	normalized := m.normalizeProviders(providers)
 	if len(normalized) == 0 {
 		return nil, &Error{Code: "provider_not_found", Message: "no provider supplied"}
@@ -357,6 +459,13 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
+		// Check context cancellation before each attempt
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		chunks, errStream := m.executeStreamProvidersOnce(ctx, rotated, func(execCtx context.Context, provider string) (<-chan cliproxyexecutor.StreamChunk, error) {
 			return m.executeStreamWithProvider(execCtx, provider, req, opts)
 		})
@@ -367,6 +476,10 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 		wait, shouldRetry := m.shouldRetryAfterError(errStream, attempt, attempts, rotated, req.Model, maxWait)
 		if !shouldRetry {
 			break
+		}
+		// Emit metrics hook for retry
+		if mh, ok := m.hook.(MetricsHook); ok {
+			mh.OnRetry(ctx, rotated[0], req.Model, attempt+1, wait, errStream)
 		}
 		if errWait := waitForCooldown(ctx, wait); errWait != nil {
 			return nil, errWait
@@ -386,7 +499,7 @@ func (m *Manager) executeWithProvider(ctx context.Context, provider string, req 
 	tried := make(map[string]struct{})
 	var lastErr error
 	for {
-		auth, executor, errPick := m.pickNext(ctx, provider, routeModel, opts, tried)
+		auth, exec, errPick := m.pickNext(ctx, provider, routeModel, opts, tried)
 		if errPick != nil {
 			if lastErr != nil {
 				return cliproxyexecutor.Response{}, lastErr
@@ -398,6 +511,15 @@ func (m *Manager) executeWithProvider(ctx context.Context, provider string, req 
 		debugLogAuthSelection(entry, auth, provider, req.Model)
 
 		tried[auth.ID] = struct{}{}
+
+		// Circuit breaker check - skip auth if circuit is open
+		cbKey := provider + ":" + auth.ID + ":" + routeModel
+		cb := m.circuitBreakers.Get(cbKey)
+		if !cb.Allow() {
+			log.Debugf("circuit breaker open for %s, skipping", cbKey)
+			continue
+		}
+
 		execCtx := ctx
 		if rt := m.roundTripperFor(auth); rt != nil {
 			execCtx = context.WithValue(execCtx, roundTripperContextKey{}, rt)
@@ -406,7 +528,7 @@ func (m *Manager) executeWithProvider(ctx context.Context, provider string, req 
 		execReq := req
 		execReq.Model, execReq.Metadata = rewriteModelForAuth(routeModel, req.Metadata, auth)
 		execReq.Model, execReq.Metadata = m.applyOAuthModelMapping(auth, execReq.Model, execReq.Metadata)
-		resp, errExec := executor.Execute(execCtx, auth, execReq, opts)
+		resp, errExec := exec.Execute(execCtx, auth, execReq, opts)
 		result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: errExec == nil}
 		if errExec != nil {
 			result.Error = &Error{Message: errExec.Error()}
@@ -417,10 +539,15 @@ func (m *Manager) executeWithProvider(ctx context.Context, provider string, req 
 			if ra := retryAfterFromError(errExec); ra != nil {
 				result.RetryAfter = ra
 			}
+			// Record circuit breaker failure for retryable errors
+			if isCircuitBreakerEligible(result.Error) {
+				cb.RecordFailure()
+			}
 			m.MarkResult(execCtx, result)
 			lastErr = errExec
 			continue
 		}
+		cb.RecordSuccess()
 		m.MarkResult(execCtx, result)
 		return resp, nil
 	}
@@ -482,7 +609,7 @@ func (m *Manager) executeStreamWithProvider(ctx context.Context, provider string
 	tried := make(map[string]struct{})
 	var lastErr error
 	for {
-		auth, executor, errPick := m.pickNext(ctx, provider, routeModel, opts, tried)
+		auth, exec, errPick := m.pickNext(ctx, provider, routeModel, opts, tried)
 		if errPick != nil {
 			if lastErr != nil {
 				return nil, lastErr
@@ -494,6 +621,15 @@ func (m *Manager) executeStreamWithProvider(ctx context.Context, provider string
 		debugLogAuthSelection(entry, auth, provider, req.Model)
 
 		tried[auth.ID] = struct{}{}
+
+		// Circuit breaker check - skip auth if circuit is open
+		cbKey := provider + ":" + auth.ID + ":" + routeModel
+		cb := m.circuitBreakers.Get(cbKey)
+		if !cb.Allow() {
+			log.Debugf("circuit breaker open for %s, skipping", cbKey)
+			continue
+		}
+
 		execCtx := ctx
 		if rt := m.roundTripperFor(auth); rt != nil {
 			execCtx = context.WithValue(execCtx, roundTripperContextKey{}, rt)
@@ -502,7 +638,7 @@ func (m *Manager) executeStreamWithProvider(ctx context.Context, provider string
 		execReq := req
 		execReq.Model, execReq.Metadata = rewriteModelForAuth(routeModel, req.Metadata, auth)
 		execReq.Model, execReq.Metadata = m.applyOAuthModelMapping(auth, execReq.Model, execReq.Metadata)
-		chunks, errStream := executor.ExecuteStream(execCtx, auth, execReq, opts)
+		chunks, errStream := exec.ExecuteStream(execCtx, auth, execReq, opts)
 		if errStream != nil {
 			rerr := &Error{Message: errStream.Error()}
 			var se cliproxyexecutor.StatusError
@@ -511,30 +647,54 @@ func (m *Manager) executeStreamWithProvider(ctx context.Context, provider string
 			}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: rerr}
 			result.RetryAfter = retryAfterFromError(errStream)
+			// Record circuit breaker failure for retryable errors
+			if isCircuitBreakerEligible(rerr) {
+				cb.RecordFailure()
+			}
 			m.MarkResult(execCtx, result)
 			lastErr = errStream
 			continue
 		}
 		out := make(chan cliproxyexecutor.StreamChunk)
-		go func(streamCtx context.Context, streamAuth *Auth, streamProvider string, streamChunks <-chan cliproxyexecutor.StreamChunk) {
+		go func(streamCtx context.Context, streamAuth *Auth, streamProvider string, streamChunks <-chan cliproxyexecutor.StreamChunk, streamCB *circuitbreaker.CircuitBreaker) {
 			defer close(out)
 			var failed bool
-			for chunk := range streamChunks {
-				if chunk.Err != nil && !failed {
-					failed = true
-					rerr := &Error{Message: chunk.Err.Error()}
-					var se cliproxyexecutor.StatusError
-					if errors.As(chunk.Err, &se) && se != nil {
-						rerr.HTTPStatus = se.StatusCode()
+			for {
+				select {
+				case <-streamCtx.Done():
+					// Context cancelled - exit gracefully to prevent goroutine leak
+					return
+				case chunk, ok := <-streamChunks:
+					if !ok {
+						// Upstream closed - record final result
+						if !failed {
+							streamCB.RecordSuccess()
+							m.MarkResult(streamCtx, Result{AuthID: streamAuth.ID, Provider: streamProvider, Model: routeModel, Success: true})
+						}
+						return
 					}
-					m.MarkResult(streamCtx, Result{AuthID: streamAuth.ID, Provider: streamProvider, Model: routeModel, Success: false, Error: rerr})
+					if chunk.Err != nil && !failed {
+						failed = true
+						rerr := &Error{Message: chunk.Err.Error()}
+						var se cliproxyexecutor.StatusError
+						if errors.As(chunk.Err, &se) && se != nil {
+							rerr.HTTPStatus = se.StatusCode()
+						}
+						// Record circuit breaker failure for retryable errors
+						if isCircuitBreakerEligible(rerr) {
+							streamCB.RecordFailure()
+						}
+						m.MarkResult(streamCtx, Result{AuthID: streamAuth.ID, Provider: streamProvider, Model: routeModel, Success: false, Error: rerr})
+					}
+					// Send chunk with context cancellation check to prevent blocking
+					select {
+					case <-streamCtx.Done():
+						return
+					case out <- chunk:
+					}
 				}
-				out <- chunk
 			}
-			if !failed {
-				m.MarkResult(streamCtx, Result{AuthID: streamAuth.ID, Provider: streamProvider, Model: routeModel, Success: true})
-			}
-		}(execCtx, auth.Clone(), provider, chunks)
+		}(execCtx, auth.Clone(), provider, chunks, cb)
 		return out, nil
 	}
 }
@@ -1009,6 +1169,20 @@ func cloneError(err *Error) *Error {
 	}
 }
 
+// isCircuitBreakerEligible determines if an error should count towards circuit breaker failure threshold.
+// Only server errors (5xx) and rate limiting (429) trigger circuit breaker transitions.
+func isCircuitBreakerEligible(err *Error) bool {
+	if err == nil {
+		return false
+	}
+	switch err.HTTPStatus {
+	case 429, 500, 502, 503, 504:
+		return true
+	default:
+		return false
+	}
+}
+
 func statusCodeFromError(err error) int {
 	if err == nil {
 		return 0
@@ -1214,8 +1388,6 @@ func (m *Manager) persist(ctx context.Context, auth *Auth) error {
 func (m *Manager) StartAutoRefresh(parent context.Context, interval time.Duration) {
 	if interval <= 0 || interval > refreshCheckInterval {
 		interval = refreshCheckInterval
-	} else {
-		interval = refreshCheckInterval
 	}
 	if m.refreshCancel != nil {
 		m.refreshCancel()
@@ -1264,7 +1436,14 @@ func (m *Manager) checkRefreshes(ctx context.Context) {
 			if !m.markRefreshPending(a.ID, now) {
 				continue
 			}
-			go m.refreshAuth(ctx, a.ID)
+			// Acquire semaphore slot before spawning goroutine to limit concurrency
+			select {
+			case refreshSemaphore <- struct{}{}:
+				go m.refreshAuth(ctx, a.ID)
+			default:
+				// Semaphore full, skip this refresh cycle
+				log.Debugf("refresh semaphore full, skipping refresh for %s, %s", a.Provider, a.ID)
+			}
 		}
 	}
 }
@@ -1500,6 +1679,15 @@ func (m *Manager) markRefreshPending(id string, now time.Time) bool {
 }
 
 func (m *Manager) refreshAuth(ctx context.Context, id string) {
+	// Panic recovery to prevent one bad auth from crashing refresh loop
+	defer func() {
+		if r := recover(); r != nil {
+			log.Errorf("panic in refreshAuth for auth %s: %v", id, r)
+		}
+		// Release semaphore slot
+		<-refreshSemaphore
+	}()
+
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1513,8 +1701,21 @@ func (m *Manager) refreshAuth(ctx context.Context, id string) {
 	if auth == nil || exec == nil {
 		return
 	}
+
+	// Emit metrics hook for refresh start
+	startTime := time.Now()
+	if mh, ok := m.hook.(MetricsHook); ok {
+		mh.OnRefreshStart(ctx, id, auth.Provider)
+	}
+
 	cloned := auth.Clone()
 	updated, err := exec.Refresh(ctx, cloned)
+
+	// Emit metrics hook for refresh complete
+	if mh, ok := m.hook.(MetricsHook); ok {
+		mh.OnRefreshComplete(ctx, id, auth.Provider, err == nil, time.Since(startTime))
+	}
+
 	if err != nil && errors.Is(err, context.Canceled) {
 		log.Debugf("refresh canceled for %s, %s", auth.Provider, auth.ID)
 		return

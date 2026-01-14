@@ -7,9 +7,7 @@ package gemini
 
 import (
 	"bytes"
-	"crypto/rand"
 	"fmt"
-	"math/big"
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
@@ -27,20 +25,22 @@ func ConvertGeminiRequestToOpenAI(modelName string, inputRawJSON []byte, stream 
 
 	root := gjson.ParseBytes(rawJSON)
 
-	// Helper for generating tool call IDs in the form: call_<alphanum>
-	genToolCallID := func() string {
-		const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-		var b strings.Builder
-		// 24 chars random suffix
-		for i := 0; i < 24; i++ {
-			n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
-			b.WriteByte(letters[n.Int64()])
+	// Helper for generating deterministic tool call IDs in the form: call_<hash>
+	genToolCallID := func(functionName string, index int) string {
+		hash := fmt.Sprintf("%x", util.HashString(fmt.Sprintf("%s-%d", functionName, index)))
+		if len(hash) > 24 {
+			hash = hash[:24]
 		}
-		return "call_" + b.String()
+		return "call_" + hash
 	}
 
+	var err error
+
 	// Model mapping
-	out, _ = sjson.Set(out, "model", modelName)
+	out, err = sjson.Set(out, "model", modelName)
+	if err != nil {
+		return inputRawJSON
+	}
 
 	// Generation config mapping
 	if genConfig := root.Get("generationConfig"); genConfig.Exists() {
@@ -122,6 +122,10 @@ func ConvertGeminiRequestToOpenAI(modelName string, inputRawJSON []byte, stream 
 					if mimeType == "" {
 						mimeType = "application/octet-stream"
 					}
+					// Only allow safe mime types or default
+					if !strings.Contains(mimeType, "/") {
+						mimeType = "application/octet-stream"
+					}
 					data := inlineData.Get("data").String()
 					imageURL := fmt.Sprintf("data:%s;base64,%s", mimeType, data)
 
@@ -179,6 +183,10 @@ func ConvertGeminiRequestToOpenAI(modelName string, inputRawJSON []byte, stream 
 						if mimeType == "" {
 							mimeType = "application/octet-stream"
 						}
+						// Only allow safe mime types or default
+						if !strings.Contains(mimeType, "/") {
+							mimeType = "application/octet-stream"
+						}
 						data := inlineData.Get("data").String()
 						imageURL := fmt.Sprintf("data:%s;base64,%s", mimeType, data)
 
@@ -190,12 +198,13 @@ func ConvertGeminiRequestToOpenAI(modelName string, inputRawJSON []byte, stream 
 
 					// Handle function calls (Gemini) -> tool calls (OpenAI)
 					if functionCall := part.Get("functionCall"); functionCall.Exists() {
-						toolCallID := genToolCallID()
+						functionName := functionCall.Get("name").String()
+						toolCallID := genToolCallID(functionName, toolCallsCount)
 						toolCallIDs = append(toolCallIDs, toolCallID)
 
 						toolCall := `{"id":"","type":"function","function":{"name":"","arguments":""}}`
 						toolCall, _ = sjson.Set(toolCall, "id", toolCallID)
-						toolCall, _ = sjson.Set(toolCall, "function.name", functionCall.Get("name").String())
+						toolCall, _ = sjson.Set(toolCall, "function.name", functionName)
 
 						// Convert args to arguments JSON string
 						if args := functionCall.Get("args"); args.Exists() {
@@ -223,14 +232,14 @@ func ConvertGeminiRequestToOpenAI(modelName string, inputRawJSON []byte, stream 
 						}
 
 						// Try to match with previous tool call ID
-						_ = functionResponse.Get("name").String() // functionName not used for now
+						funcName := functionResponse.Get("name").String()
 						if len(toolCallIDs) > 0 {
 							// Use the last tool call ID (simple matching by function name)
 							// In a real implementation, you might want more sophisticated matching
 							toolMsg, _ = sjson.Set(toolMsg, "tool_call_id", toolCallIDs[len(toolCallIDs)-1])
 						} else {
-							// Generate a tool call ID if none available
-							toolMsg, _ = sjson.Set(toolMsg, "tool_call_id", genToolCallID())
+							// Generate a deterministic tool call ID if none available, based on function name
+							toolMsg, _ = sjson.Set(toolMsg, "tool_call_id", genToolCallID(funcName, 0))
 						}
 
 						out, _ = sjson.SetRaw(out, "messages.-1", toolMsg)

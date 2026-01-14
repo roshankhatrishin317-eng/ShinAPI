@@ -334,20 +334,34 @@ func convertChatCompletionsStreamChunkToCompletions(chunkData []byte) []byte {
 	hasContent := false
 	if chatChoices := root.Get("choices"); chatChoices.Exists() && chatChoices.IsArray() {
 		chatChoices.ForEach(func(_, choice gjson.Result) bool {
-			// Check if delta has content or finish_reason
-			if delta := choice.Get("delta"); delta.Exists() {
-				if content := delta.Get("content"); content.Exists() && content.String() != "" {
-					hasContent = true
-					return false // Break out of forEach
-				}
-			}
-			// Also check for finish_reason to ensure we don't skip final chunks
+			// Always pass through chunks with finish_reason
 			if finishReason := choice.Get("finish_reason"); finishReason.Exists() && finishReason.String() != "" && finishReason.String() != "null" {
 				hasContent = true
-				return false // Break out of forEach
+				return false
+			}
+			// Always pass through chunks with content (even empty string if it signifies existence)
+			if delta := choice.Get("delta"); delta.Exists() {
+				if delta.Get("content").Exists() {
+					hasContent = true
+					return false
+				}
+				// Also pass through role updates or other metadata
+				if delta.Get("role").Exists() {
+					hasContent = true
+					return false
+				}
 			}
 			return true
 		})
+	}
+
+	// Also check for usage stats or other root-level metadata
+	if root.Get("usage").Exists() || root.Get("id").Exists() && !hasContent {
+		// If it's just an ID chunk without choices, we should probably pass it too if it's the first one,
+		// but typically chunks have choices. Usage chunks are important.
+		if root.Get("usage").Exists() {
+			hasContent = true
+		}
 	}
 
 	// If no meaningful content, return nil to indicate this chunk should be skipped
@@ -435,6 +449,35 @@ func (h *OpenAIAPIHandler) handleNonStreamingResponse(c *gin.Context, rawJSON []
 	cliCancel()
 }
 
+// setupStreamResponse handles the common setup for streaming responses including headers and context cancellation.
+// It returns the context, cancel function, data channel, error channel, and a flush helper.
+func (h *OpenAIAPIHandler) setupStreamResponse(c *gin.Context, rawJSON []byte) (context.Context, func(error), <-chan []byte, <-chan *interfaces.ErrorMessage, http.Flusher, error) {
+	// Get the http.Flusher interface to manually flush the response.
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		return nil, nil, nil, nil, nil, fmt.Errorf("streaming not supported")
+	}
+
+	modelName := gjson.GetBytes(rawJSON, "model").String()
+	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
+	dataChan, errChan := h.ExecuteStreamWithFanout(cliCtx, h.HandlerType(), modelName, rawJSON, h.GetAlt(c))
+
+	return cliCtx, func(err error) {
+		if err != nil {
+			// ensure we don't leak context cancel cause if needed
+			// actual implementation of GetContextWithCancel might wrap standard cancel
+		}
+		cliCancel(err)
+	}, dataChan, errChan, flusher, nil
+}
+
+func (h *OpenAIAPIHandler) setSSEHeaders(c *gin.Context) {
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("Access-Control-Allow-Origin", "*")
+}
+
 // handleStreamingResponse handles streaming responses for Gemini models.
 // It establishes a streaming connection with the backend service and forwards
 // the response chunks to the client in real-time using Server-Sent Events.
@@ -443,27 +486,15 @@ func (h *OpenAIAPIHandler) handleNonStreamingResponse(c *gin.Context, rawJSON []
 //   - c: The Gin context containing the HTTP request and response
 //   - rawJSON: The raw JSON bytes of the OpenAI-compatible request
 func (h *OpenAIAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON []byte) {
-	// Get the http.Flusher interface to manually flush the response.
-	flusher, ok := c.Writer.(http.Flusher)
-	if !ok {
+	_, cliCancel, dataChan, errChan, flusher, err := h.setupStreamResponse(c, rawJSON)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
 			Error: handlers.ErrorDetail{
-				Message: "Streaming not supported",
+				Message: err.Error(),
 				Type:    "server_error",
 			},
 		})
 		return
-	}
-
-	modelName := gjson.GetBytes(rawJSON, "model").String()
-	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
-	dataChan, errChan := h.ExecuteStreamWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, h.GetAlt(c))
-
-	setSSEHeaders := func() {
-		c.Header("Content-Type", "text/event-stream")
-		c.Header("Cache-Control", "no-cache")
-		c.Header("Connection", "keep-alive")
-		c.Header("Access-Control-Allow-Origin", "*")
 	}
 
 	// Peek at the first chunk to determine success or failure before setting headers
@@ -489,7 +520,7 @@ func (h *OpenAIAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON []byt
 		case chunk, ok := <-dataChan:
 			if !ok {
 				// Stream closed without data? Send DONE or just headers.
-				setSSEHeaders()
+				h.setSSEHeaders(c)
 				_, _ = fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
 				flusher.Flush()
 				cliCancel(nil)
@@ -497,7 +528,7 @@ func (h *OpenAIAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON []byt
 			}
 
 			// Success! Commit to streaming headers.
-			setSSEHeaders()
+			h.setSSEHeaders(c)
 
 			_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", string(chunk))
 			flusher.Flush()
@@ -545,30 +576,22 @@ func (h *OpenAIAPIHandler) handleCompletionsNonStreamingResponse(c *gin.Context,
 //   - c: The Gin context containing the HTTP request and response
 //   - rawJSON: The raw JSON bytes of the OpenAI-compatible completions request
 func (h *OpenAIAPIHandler) handleCompletionsStreamingResponse(c *gin.Context, rawJSON []byte) {
-	// Get the http.Flusher interface to manually flush the response.
-	flusher, ok := c.Writer.(http.Flusher)
-	if !ok {
+	// Convert completions request to chat completions format
+	chatCompletionsJSON := convertCompletionsRequestToChatCompletions(rawJSON)
+
+	// Reuse setup logic, but we need to override the data channel source essentially,
+	// or just reuse the logic manually because we modified the request body.
+	// Since setupStreamResponse takes rawJSON, we can pass the converted JSON.
+	// But wait, setupStreamResponse parses model name from rawJSON, which is correct.
+	_, cliCancel, dataChan, errChan, flusher, err := h.setupStreamResponse(c, chatCompletionsJSON)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
 			Error: handlers.ErrorDetail{
-				Message: "Streaming not supported",
+				Message: err.Error(),
 				Type:    "server_error",
 			},
 		})
 		return
-	}
-
-	// Convert completions request to chat completions format
-	chatCompletionsJSON := convertCompletionsRequestToChatCompletions(rawJSON)
-
-	modelName := gjson.GetBytes(chatCompletionsJSON, "model").String()
-	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
-	dataChan, errChan := h.ExecuteStreamWithAuthManager(cliCtx, h.HandlerType(), modelName, chatCompletionsJSON, "")
-
-	setSSEHeaders := func() {
-		c.Header("Content-Type", "text/event-stream")
-		c.Header("Cache-Control", "no-cache")
-		c.Header("Connection", "keep-alive")
-		c.Header("Access-Control-Allow-Origin", "*")
 	}
 
 	// Peek at the first chunk
@@ -592,7 +615,7 @@ func (h *OpenAIAPIHandler) handleCompletionsStreamingResponse(c *gin.Context, ra
 			return
 		case chunk, ok := <-dataChan:
 			if !ok {
-				setSSEHeaders()
+				h.setSSEHeaders(c)
 				_, _ = fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
 				flusher.Flush()
 				cliCancel(nil)
@@ -600,7 +623,7 @@ func (h *OpenAIAPIHandler) handleCompletionsStreamingResponse(c *gin.Context, ra
 			}
 
 			// Success! Set headers.
-			setSSEHeaders()
+			h.setSSEHeaders(c)
 
 			// Write the first chunk
 			converted := convertChatCompletionsStreamChunkToCompletions(chunk)

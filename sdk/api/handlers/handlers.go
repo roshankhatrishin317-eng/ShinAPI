@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
@@ -722,3 +723,97 @@ func (h *BaseAPIHandler) LoggingAPIResponseError(ctx context.Context, err *inter
 // APIHandlerCancelFunc is a function type for canceling an API handler's context.
 // It can optionally accept parameters, which are used for logging the response.
 type APIHandlerCancelFunc func(params ...interface{})
+
+// ExecuteStreamWithFanout executes a streaming request with optional fanout support.
+// If fanout is enabled and a matching stream exists, it subscribes to the existing stream
+// instead of creating a new upstream connection.
+func (h *BaseAPIHandler) ExecuteStreamWithFanout(ctx context.Context, handlerType, modelName string, rawJSON []byte, alt string) (<-chan []byte, <-chan *interfaces.ErrorMessage) {
+	// Check if fanout is enabled and applicable
+	fanout := executor.GetStreamFanout()
+	if fanout.IsEnabled() {
+		result := executor.CheckStreamFanout(modelName, rawJSON)
+		if !result.IsNew && result.Subscriber != nil {
+			// Subscribe to existing stream - reuse the upstream connection
+			dataChan := make(chan []byte)
+			errChan := make(chan *interfaces.ErrorMessage, 1)
+
+			go func() {
+				defer close(dataChan)
+				defer close(errChan)
+
+				for event := range result.Subscriber {
+					select {
+					case dataChan <- event.Data:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}()
+
+			return dataChan, errChan
+		}
+
+		// Create new stream and publish to fanout
+		if result.Stream != nil {
+			dataChan, errChan := h.ExecuteStreamWithAuthManager(ctx, handlerType, modelName, rawJSON, alt)
+
+			// Wrap the data channel to publish to fanout
+			fanoutDataChan := make(chan []byte)
+			go func() {
+				defer close(fanoutDataChan)
+				defer result.Stream.Complete()
+
+				for chunk := range dataChan {
+					// Publish to fanout subscribers
+					if len(chunk) > 0 {
+						result.Stream.PublishBytes(chunk)
+					}
+					// Forward to caller
+					select {
+					case fanoutDataChan <- chunk:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}()
+
+			return fanoutDataChan, errChan
+		}
+	}
+
+	// Fallback to normal execution without fanout
+	return h.ExecuteStreamWithAuthManager(ctx, handlerType, modelName, rawJSON, alt)
+}
+
+// SetAuditContext sets audit-related values in the Gin context for the audit middleware.
+func SetAuditContext(c *gin.Context, provider, model string, inputTokens, outputTokens int64, cached bool) {
+	if c == nil {
+		return
+	}
+	if provider != "" {
+		c.Set("audit_provider", provider)
+	}
+	if model != "" {
+		c.Set("audit_model", model)
+	}
+	if inputTokens > 0 {
+		c.Set("audit_input_tokens", inputTokens)
+	}
+	if outputTokens > 0 {
+		c.Set("audit_output_tokens", outputTokens)
+	}
+	c.Set("audit_cached", cached)
+}
+
+// SetAuditAuth sets auth-related values in the Gin context for the audit middleware.
+func SetAuditAuth(c *gin.Context, authID, authLabel string) {
+	if c == nil {
+		return
+	}
+	if authID != "" {
+		c.Set("auth_id", authID)
+	}
+	if authLabel != "" {
+		c.Set("auth_label", authLabel)
+	}
+}

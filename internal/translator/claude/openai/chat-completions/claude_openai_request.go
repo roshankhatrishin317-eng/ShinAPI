@@ -136,20 +136,25 @@ func ConvertOpenAIRequestToClaude(modelName string, inputRawJSON []byte, stream 
 	out, _ = sjson.Set(out, "stream", stream)
 
 	// Process messages and transform them to Claude Code format
+	// First pass: collect all messages and group consecutive tool results
 	if messages := root.Get("messages"); messages.Exists() && messages.IsArray() {
-		messages.ForEach(func(_, message gjson.Result) bool {
+		messageArray := messages.Array()
+		i := 0
+		for i < len(messageArray) {
+			message := messageArray[i]
 			role := message.Get("role").String()
 			contentResult := message.Get("content")
 
 			switch role {
 			case "system", "user", "assistant":
 				// Create Claude Code message with appropriate role mapping
-				if role == "system" {
-					role = "user"
+				msgRole := role
+				if msgRole == "system" {
+					msgRole = "user"
 				}
 
 				msg := `{"role":"","content":[]}`
-				msg, _ = sjson.Set(msg, "role", role)
+				msg, _ = sjson.Set(msg, "role", msgRole)
 
 				// Handle content based on its type (string or array)
 				if contentResult.Exists() && contentResult.Type == gjson.String && contentResult.String() != "" {
@@ -226,19 +231,31 @@ func ConvertOpenAIRequestToClaude(modelName string, inputRawJSON []byte, stream 
 				}
 
 				out, _ = sjson.SetRaw(out, "messages.-1", msg)
+				i++
 
 			case "tool":
-				// Handle tool result messages conversion
-				toolCallID := message.Get("tool_call_id").String()
-				content := message.Get("content").String()
+				// Collect all consecutive tool messages into a single user message
+				// Claude requires all tool_results to be in one user message following the assistant's tool_use
+				msg := `{"role":"user","content":[]}`
 
-				msg := `{"role":"user","content":[{"type":"tool_result","tool_use_id":"","content":""}]}`
-				msg, _ = sjson.Set(msg, "content.0.tool_use_id", toolCallID)
-				msg, _ = sjson.Set(msg, "content.0.content", content)
+				for i < len(messageArray) && messageArray[i].Get("role").String() == "tool" {
+					toolMessage := messageArray[i]
+					toolCallID := toolMessage.Get("tool_call_id").String()
+					content := toolMessage.Get("content").String()
+
+					toolResult := `{"type":"tool_result","tool_use_id":"","content":""}`
+					toolResult, _ = sjson.Set(toolResult, "tool_use_id", toolCallID)
+					toolResult, _ = sjson.Set(toolResult, "content", content)
+					msg, _ = sjson.SetRaw(msg, "content.-1", toolResult)
+					i++
+				}
+
 				out, _ = sjson.SetRaw(out, "messages.-1", msg)
+
+			default:
+				i++
 			}
-			return true
-		})
+		}
 	}
 
 	// Tools mapping: OpenAI tools -> Claude Code tools

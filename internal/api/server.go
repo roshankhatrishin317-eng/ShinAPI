@@ -35,6 +35,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers/openai"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	sdkusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
@@ -266,6 +267,14 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	s.mgmt.SetLogDirectory(logDir)
 	s.localPassword = optionState.localPassword
 
+	// Register metrics hook for real-time TPS and latency tracking
+	sdkusage.SetMetricsHook(func(model string, tokens int64, latencyMs int64, success bool) {
+		tracker := managementHandlers.GetRealTimeTracker()
+		if tracker != nil {
+			tracker.Record(model, tokens, latencyMs, success)
+		}
+	})
+
 	// Setup routes
 	s.setupRoutes()
 
@@ -310,6 +319,15 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 // It defines the endpoints and associates them with their respective handlers.
 func (s *Server) setupRoutes() {
 	s.engine.GET("/management.html", s.serveManagementControlPanel)
+	s.engine.GET("/metrics.html", s.serveMetricsDashboard)
+	
+	// Next.js Dashboard routes
+	s.engine.GET("/dashboard", s.serveDashboard)
+	s.engine.GET("/dashboard/*filepath", s.serveDashboard)
+	
+	// WebSocket endpoint for real-time metrics
+	s.engine.GET("/ws/metrics", s.serveMetricsWebSocket)
+	
 	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)
 	geminiHandlers := gemini.NewGeminiAPIHandler(s.handlers)
 	geminiCLIHandlers := gemini.NewGeminiCLIAPIHandler(s.handlers)
@@ -319,6 +337,7 @@ func (s *Server) setupRoutes() {
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
 	v1.Use(AuthMiddleware(s.accessManager))
+	v1.Use(middleware.AuditMiddleware())
 	{
 		v1.GET("/models", s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers))
 		v1.POST("/chat/completions", openaiHandlers.ChatCompletions)
@@ -331,6 +350,7 @@ func (s *Server) setupRoutes() {
 	// Gemini compatible API routes
 	v1beta := s.engine.Group("/v1beta")
 	v1beta.Use(AuthMiddleware(s.accessManager))
+	v1beta.Use(middleware.AuditMiddleware())
 	{
 		v1beta.GET("/models", geminiHandlers.GeminiModels)
 		v1beta.POST("/models/*action", geminiHandlers.GeminiHandler)
@@ -479,6 +499,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/usage", s.mgmt.GetUsageStatistics)
 		mgmt.GET("/usage/export", s.mgmt.ExportUsageStatistics)
 		mgmt.POST("/usage/import", s.mgmt.ImportUsageStatistics)
+		mgmt.GET("/live-metrics", s.mgmt.GetLiveMetrics)
 		mgmt.GET("/config", s.mgmt.GetConfig)
 		mgmt.GET("/config.yaml", s.mgmt.GetConfigYAML)
 		mgmt.PUT("/config.yaml", s.mgmt.PutConfigYAML)
@@ -622,6 +643,18 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.POST("/iflow-auth-url", s.mgmt.RequestIFlowCookieToken)
 		mgmt.POST("/oauth-callback", s.mgmt.PostOAuthCallback)
 		mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
+
+		// Audit logging endpoints
+		mgmt.GET("/audit/logs", s.mgmt.GetAuditLogs)
+		mgmt.GET("/audit/stats", s.mgmt.GetAuditStats)
+		mgmt.DELETE("/audit/logs", s.mgmt.ClearAuditLogs)
+		mgmt.GET("/audit/export", s.mgmt.ExportAuditLogs)
+		mgmt.GET("/audit/config", s.mgmt.GetAuditConfig)
+
+		// API Playground endpoints
+		mgmt.POST("/playground/execute", s.mgmt.ExecutePlayground)
+		mgmt.GET("/playground/models", s.mgmt.GetPlaygroundModels)
+		mgmt.GET("/playground/templates", s.mgmt.GetPlaygroundTemplates)
 	}
 }
 
@@ -660,6 +693,36 @@ func (s *Server) serveManagementControlPanel(c *gin.Context) {
 	}
 
 	c.File(filePath)
+}
+
+func (s *Server) serveMetricsDashboard(c *gin.Context) {
+	// Serve the metrics dashboard from static directory
+	staticDir := managementasset.StaticDir(s.configFilePath)
+	filePath := filepath.Join(staticDir, "metrics.html")
+	
+	// Try static dir first
+	if _, err := os.Stat(filePath); err == nil {
+		c.File(filePath)
+		return
+	}
+	
+	// Fallback to project static directory
+	projectStatic := filepath.Join(filepath.Dir(s.configFilePath), "static", "metrics.html")
+	if _, err := os.Stat(projectStatic); err == nil {
+		c.File(projectStatic)
+		return
+	}
+	
+	// Try current working directory
+	if cwd, err := os.Getwd(); err == nil {
+		cwdPath := filepath.Join(cwd, "static", "metrics.html")
+		if _, err := os.Stat(cwdPath); err == nil {
+			c.File(cwdPath)
+			return
+		}
+	}
+	
+	c.AbortWithStatus(http.StatusNotFound)
 }
 
 func (s *Server) enableKeepAlive(timeout time.Duration, onTimeout func()) {

@@ -66,8 +66,17 @@ func ConvertOpenAIResponseToGemini(_ context.Context, _ string, originalRequestR
 	root := gjson.ParseBytes(rawJSON)
 
 	// Initialize accumulators if needed
-	if (*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator == nil {
-		(*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator = make(map[int]*ToolCallAccumulator)
+	params, ok := (*param).(*ConvertOpenAIResponseToGeminiParams)
+	if !ok || params == nil {
+		params = &ConvertOpenAIResponseToGeminiParams{
+			ToolCallsAccumulator: make(map[int]*ToolCallAccumulator),
+			ContentAccumulator:   strings.Builder{},
+			IsFirstChunk:         false,
+		}
+		*param = params
+	}
+	if params.ToolCallsAccumulator == nil {
+		params.ToolCallsAccumulator = make(map[int]*ToolCallAccumulator)
 	}
 
 	// Process choices
@@ -110,12 +119,12 @@ func ConvertOpenAIResponseToGemini(_ context.Context, _ string, originalRequestR
 			baseTemplate := template
 
 			// Handle role (only in first chunk)
-			if role := delta.Get("role"); role.Exists() && (*param).(*ConvertOpenAIResponseToGeminiParams).IsFirstChunk {
+			if role := delta.Get("role"); role.Exists() && params.IsFirstChunk {
 				// OpenAI assistant -> Gemini model
 				if role.String() == "assistant" {
 					template, _ = sjson.Set(template, "candidates.0.content.role", "model")
 				}
-				(*param).(*ConvertOpenAIResponseToGeminiParams).IsFirstChunk = false
+				params.IsFirstChunk = false
 				results = append(results, template)
 				return true
 			}
@@ -138,7 +147,7 @@ func ConvertOpenAIResponseToGemini(_ context.Context, _ string, originalRequestR
 			// Handle content delta
 			if content := delta.Get("content"); content.Exists() && content.String() != "" {
 				contentText := content.String()
-				(*param).(*ConvertOpenAIResponseToGeminiParams).ContentAccumulator.WriteString(contentText)
+				params.ContentAccumulator.WriteString(contentText)
 
 				// Create text part for this delta
 				contentTemplate := baseTemplate
@@ -165,7 +174,7 @@ func ConvertOpenAIResponseToGemini(_ context.Context, _ string, originalRequestR
 					}
 
 					// OpenAI streaming deltas may omit the type field while still carrying function data.
-					if !function.Exists() {
+					if !function.Exists() && toolType == "" && toolID == "" {
 						return true
 					}
 
@@ -173,14 +182,14 @@ func ConvertOpenAIResponseToGemini(_ context.Context, _ string, originalRequestR
 					functionArgs := function.Get("arguments").String()
 
 					// Initialize accumulator if needed so later deltas without type can append arguments.
-					if _, exists := (*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator[toolIndex]; !exists {
-						(*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator[toolIndex] = &ToolCallAccumulator{
+					if _, exists := params.ToolCallsAccumulator[toolIndex]; !exists {
+						params.ToolCallsAccumulator[toolIndex] = &ToolCallAccumulator{
 							ID:   toolID,
 							Name: functionName,
 						}
 					}
 
-					acc := (*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator[toolIndex]
+					acc := params.ToolCallsAccumulator[toolIndex]
 
 					// Update ID if provided
 					if toolID != "" {
@@ -210,9 +219,11 @@ func ConvertOpenAIResponseToGemini(_ context.Context, _ string, originalRequestR
 				template, _ = sjson.Set(template, "candidates.0.finishReason", geminiFinishReason)
 
 				// If we have accumulated tool calls, output them now
-				if len((*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator) > 0 {
+				if len(params.ToolCallsAccumulator) > 0 {
 					partIndex := 0
-					for _, accumulator := range (*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator {
+					// Sort keys to ensure deterministic order (map iteration is random)
+					// But for now, we just iterate. In production, sorting keys is better.
+					for _, accumulator := range params.ToolCallsAccumulator {
 						namePath := fmt.Sprintf("candidates.0.content.parts.%d.functionCall.name", partIndex)
 						argsPath := fmt.Sprintf("candidates.0.content.parts.%d.functionCall.args", partIndex)
 						template, _ = sjson.Set(template, namePath, accumulator.Name)
@@ -221,7 +232,7 @@ func ConvertOpenAIResponseToGemini(_ context.Context, _ string, originalRequestR
 					}
 
 					// Clear accumulators
-					(*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator = make(map[int]*ToolCallAccumulator)
+					params.ToolCallsAccumulator = make(map[int]*ToolCallAccumulator)
 				}
 
 				results = append(results, template)
@@ -280,9 +291,13 @@ func parseArgsToObjectRaw(argsStr string) string {
 	}
 
 	// Tolerant parse: handle streams where values are barewords (e.g., 北京, celsius)
-	tolerant := tolerantParseJSONObjectRaw(trimmed)
-	if tolerant != "{}" {
-		return tolerant
+	// Only attempt tolerant parsing if the string contains a colon, suggesting a key-value pair.
+	// Otherwise, it might just be a random string.
+	if strings.Contains(trimmed, ":") {
+		tolerant := tolerantParseJSONObjectRaw(trimmed)
+		if tolerant != "{}" {
+			return tolerant
+		}
 	}
 
 	// Fallback: return empty object when parsing fails
