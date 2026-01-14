@@ -54,11 +54,23 @@ Get 10% OFF GLM CODING PLAN：https://z.ai/subscribe?ic=8JVLJQFSKB
 - iFlow multi-account load balancing
 - OpenAI Codex multi-account load balancing
 - OpenAI-compatible upstream providers via config (e.g., OpenRouter)
+- Integrated Web Dashboard for management and monitoring
 - Reusable Go SDK for embedding the proxy (see `docs/sdk-usage.md`)
 
 ## Getting Started
 
 CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
+
+## Web Dashboard
+
+CLIProxyAPI now comes with a built-in web dashboard for easier management and monitoring.
+Access it at `http://localhost:8317/dashboard` (default port).
+
+Features include:
+- Real-time usage statistics
+- Provider health monitoring
+- Configuration management
+- API Playground
 
 ## Management API
 
