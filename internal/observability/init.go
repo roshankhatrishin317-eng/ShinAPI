@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // ObservabilityConfig holds all observability configuration.
@@ -25,13 +26,26 @@ func DefaultObservabilityConfig() ObservabilityConfig {
 
 // RegisterGinRoutes registers observability routes on a Gin engine.
 func RegisterGinRoutes(r *gin.Engine, cfg ObservabilityConfig) {
+	RegisterGinRoutesWithOptions(r, cfg, false)
+}
+
+// RegisterGinRoutesWithOptions registers observability routes with optional official Prometheus client.
+// When useOfficialClient is true, uses promhttp.Handler() from prometheus/client_golang.
+func RegisterGinRoutesWithOptions(r *gin.Engine, cfg ObservabilityConfig, useOfficialClient bool) {
 	if cfg.Metrics.Enabled {
-		metrics := GetMetrics()
 		path := cfg.Metrics.Path
 		if path == "" {
 			path = "/metrics"
 		}
-		r.GET(path, gin.WrapH(metrics.Handler()))
+
+		if useOfficialClient {
+			// Use official prometheus/client_golang handler
+			r.GET(path, gin.WrapH(promhttp.Handler()))
+		} else {
+			// Use custom MetricsCollector handler
+			metrics := GetMetrics()
+			r.GET(path, gin.WrapH(metrics.Handler()))
+		}
 	}
 
 	// Health check endpoint

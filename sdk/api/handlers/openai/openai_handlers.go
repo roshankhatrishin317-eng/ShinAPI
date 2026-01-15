@@ -108,6 +108,9 @@ func (h *OpenAIAPIHandler) ChatCompletions(c *gin.Context) {
 		return
 	}
 
+	agentCfg, cleaned := parseAgenticConfig(rawJSON)
+	rawJSON = cleaned
+
 	// Check if the client requested a streaming response.
 	streamResult := gjson.GetBytes(rawJSON, "stream")
 	stream := streamResult.Type == gjson.True
@@ -118,6 +121,15 @@ func (h *OpenAIAPIHandler) ChatCompletions(c *gin.Context) {
 		modelName := gjson.GetBytes(rawJSON, "model").String()
 		rawJSON = responsesconverter.ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName, rawJSON, stream)
 		stream = gjson.GetBytes(rawJSON, "stream").Bool()
+	}
+
+	if agentCfg.Enabled {
+		if stream {
+			h.handleAgenticStreamingResponse(c, rawJSON, agentCfg)
+			return
+		}
+		h.handleAgenticNonStreamingResponse(c, rawJSON, agentCfg)
+		return
 	}
 
 	if stream {

@@ -45,6 +45,7 @@ import { ModelPieChart, RequestChart } from '@/components/Charts'
 import { CommandPalette, useCommandPalette } from '@/components/CommandPalette'
 import { APIPlayground } from '@/components/APIPlayground'
 import { AuditLogViewer } from '@/components/AuditLogViewer'
+import { MetricsAnalytics } from '@/components/MetricsAnalytics'
 
 interface Metrics {
   rpm: number
@@ -247,7 +248,7 @@ export default function Dashboard() {
   const [tpmHistory, setTpmHistory] = useState<number[]>([])
   const [tpsHistory, setTpsHistory] = useState<number[]>([])
   const [prevMetrics, setPrevMetrics] = useState<Metrics | null>(null)
-  const [activeTab, setActiveTab] = useState<'metrics' | 'playground' | 'logs'>('metrics')
+  const [activeTab, setActiveTab] = useState<'metrics' | 'analytics' | 'playground' | 'logs'>('metrics')
   
   const commandPalette = useCommandPalette()
 
@@ -385,6 +386,17 @@ export default function Dashboard() {
           >
             <BarChart3 className="w-4 h-4" />
             Metrics
+          </button>
+          <button
+            onClick={() => setActiveTab('analytics')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium transition-all ${
+              activeTab === 'analytics'
+                ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
+                : 'bg-zinc-900/50 text-zinc-400 border border-white/5 hover:text-white hover:border-white/10'
+            }`}
+          >
+            <TrendingUp className="w-4 h-4" />
+            Analytics
           </button>
           <button
             onClick={() => setActiveTab('playground')}
@@ -606,6 +618,10 @@ export default function Dashboard() {
 
         <FooterStats metrics={metrics} />
           </>
+        )}
+
+        {activeTab === 'analytics' && (
+          <MetricsAnalytics />
         )}
 
         {activeTab === 'playground' && (

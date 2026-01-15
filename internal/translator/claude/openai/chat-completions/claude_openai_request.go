@@ -269,10 +269,13 @@ func ConvertOpenAIRequestToClaude(modelName string, inputRawJSON []byte, stream 
 				anthropicTool, _ = sjson.Set(anthropicTool, "description", function.Get("description").String())
 
 				// Convert parameters schema for the tool
+				// Claude requires input_schema to be present, default to empty object schema
 				if parameters := function.Get("parameters"); parameters.Exists() {
 					anthropicTool, _ = sjson.SetRaw(anthropicTool, "input_schema", parameters.Raw)
 				} else if parameters := function.Get("parametersJsonSchema"); parameters.Exists() {
 					anthropicTool, _ = sjson.SetRaw(anthropicTool, "input_schema", parameters.Raw)
+				} else {
+					anthropicTool, _ = sjson.SetRaw(anthropicTool, "input_schema", `{"type":"object","properties":{}}`)
 				}
 
 				out, _ = sjson.SetRaw(out, "tools.-1", anthropicTool)

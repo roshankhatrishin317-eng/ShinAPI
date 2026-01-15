@@ -44,6 +44,24 @@ type SDKConfig struct {
 
 	// Performance configures HTTP connection pooling and streaming optimization.
 	Performance PerformanceConfig `yaml:"performance,omitempty" json:"performance,omitempty"`
+
+	// MetricsDB configures PostgreSQL database for metrics persistence.
+	MetricsDB MetricsDBConfig `yaml:"metrics-db,omitempty" json:"metrics-db,omitempty"`
+
+	// Tools configures tool calling format conversion.
+	Tools ToolsConfig `yaml:"tools,omitempty" json:"tools,omitempty"`
+
+	// Reasoning configures extended thinking/reasoning support.
+	Reasoning ReasoningConfig `yaml:"reasoning,omitempty" json:"reasoning,omitempty"`
+
+	// Agent configures agentic loop orchestration.
+	Agent AgentConfig `yaml:"agent,omitempty" json:"agent,omitempty"`
+
+	// Context configures context window management.
+	Context ContextConfig `yaml:"context,omitempty" json:"context,omitempty"`
+
+	// Retry configures retry behavior with exponential backoff.
+	Retry RetryConfig `yaml:"retry,omitempty" json:"retry,omitempty"`
 }
 
 // CacheConfig holds response caching configuration.
@@ -230,6 +248,11 @@ type MetricsConfig struct {
 
 	// HistogramBuckets defines latency histogram buckets in milliseconds.
 	HistogramBuckets []float64 `yaml:"histogram-buckets" json:"histogram_buckets"`
+
+	// UseOfficialClient enables the official prometheus/client_golang library
+	// instead of the custom implementation. When enabled, the /metrics endpoint
+	// uses promhttp.Handler() for standard Prometheus scraping. Default: false.
+	UseOfficialClient bool `yaml:"use-official-client" json:"use_official_client"`
 }
 
 // TracingConfig configures OpenTelemetry tracing.
@@ -397,4 +420,167 @@ func DefaultPerformanceConfig() PerformanceConfig {
 			DedupWindowSeconds: 5,
 		},
 	}
+}
+
+// MetricsDBConfig configures PostgreSQL database for metrics persistence.
+type MetricsDBConfig struct {
+	// Enabled controls whether metrics are persisted to database.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// DSN is the PostgreSQL connection string.
+	// Example: postgres://user:password@host:5432/database?sslmode=require
+	DSN string `yaml:"dsn" json:"dsn"`
+
+	// MaxConnections is the maximum number of database connections.
+	MaxConnections int `yaml:"max-connections" json:"max_connections"`
+
+	// RetentionDays is how many days of metrics to keep.
+	RetentionDays int `yaml:"retention-days" json:"retention_days"`
+
+	// FlushIntervalSeconds is how often to flush buffered metrics to the database.
+	FlushIntervalSeconds int `yaml:"flush-interval-seconds" json:"flush_interval_seconds"`
+
+	// BatchSize is the number of metrics to batch before flushing.
+	BatchSize int `yaml:"batch-size" json:"batch_size"`
+}
+
+// ToolsConfig configures tool calling format conversion.
+type ToolsConfig struct {
+	// Enabled controls whether tool calling features are active.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// FormatConversion enables automatic tool format conversion between providers.
+	FormatConversion bool `yaml:"format-conversion" json:"format_conversion"`
+
+	// StreamingAccumulation enables streaming tool call accumulation.
+	StreamingAccumulation bool `yaml:"streaming-accumulation" json:"streaming_accumulation"`
+
+	// MaxToolCallsPerIteration limits tool calls per agentic iteration.
+	MaxToolCallsPerIteration int `yaml:"max-tool-calls-per-iteration" json:"max_tool_calls_per_iteration"`
+}
+
+// ReasoningConfig configures extended thinking/reasoning support.
+type ReasoningConfig struct {
+	// Enabled controls whether reasoning features are active.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// ExtractThinking controls whether to extract thinking from responses.
+	ExtractThinking bool `yaml:"extract-thinking" json:"extract_thinking"`
+
+	// ShowThinkingToClient controls whether thinking is returned to client.
+	ShowThinkingToClient bool `yaml:"show-thinking-to-client" json:"show_thinking_to_client"`
+
+	// Claude holds Claude-specific reasoning settings.
+	Claude ClaudeReasoningConfig `yaml:"claude,omitempty" json:"claude,omitempty"`
+
+	// Gemini holds Gemini-specific reasoning settings.
+	Gemini GeminiReasoningConfig `yaml:"gemini,omitempty" json:"gemini,omitempty"`
+
+	// DeepSeek holds DeepSeek-specific reasoning settings.
+	DeepSeek DeepSeekReasoningConfig `yaml:"deepseek,omitempty" json:"deepseek,omitempty"`
+}
+
+// ClaudeReasoningConfig holds Claude-specific reasoning settings.
+type ClaudeReasoningConfig struct {
+	// DefaultEffort is the default effort level (low, medium, high).
+	DefaultEffort string `yaml:"default-effort" json:"default_effort"`
+
+	// EnableThinking enables extended thinking mode.
+	EnableThinking bool `yaml:"enable-thinking" json:"enable_thinking"`
+
+	// BudgetTokens is the default thinking budget in tokens.
+	BudgetTokens int `yaml:"budget-tokens" json:"budget_tokens"`
+
+	// InterleavedTools enables tool use with thinking (requires beta header).
+	InterleavedTools bool `yaml:"interleaved-tools" json:"interleaved_tools"`
+}
+
+// GeminiReasoningConfig holds Gemini-specific reasoning settings.
+type GeminiReasoningConfig struct {
+	// DefaultThinkingLevel is the default thinking level (low, high).
+	DefaultThinkingLevel string `yaml:"default-thinking-level" json:"default_thinking_level"`
+
+	// IncludeThoughts includes thought summaries in response.
+	IncludeThoughts bool `yaml:"include-thoughts" json:"include_thoughts"`
+
+	// PreserveSignatures preserves thought signatures for multi-turn.
+	PreserveSignatures bool `yaml:"preserve-signatures" json:"preserve_signatures"`
+
+	// ForceTemperature1 forces temperature to 1.0 for Gemini 3.
+	ForceTemperature1 bool `yaml:"force-temperature-1" json:"force_temperature_1"`
+}
+
+// DeepSeekReasoningConfig holds DeepSeek-specific reasoning settings.
+type DeepSeekReasoningConfig struct {
+	// ExtractThinkTags extracts <think>...</think> tags.
+	ExtractThinkTags bool `yaml:"extract-think-tags" json:"extract_think_tags"`
+}
+
+// AgentConfig configures agentic loop orchestration.
+type AgentConfig struct {
+	// Enabled controls whether agentic features are active.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// MaxIterations is the maximum agent loop iterations.
+	MaxIterations int `yaml:"max-iterations" json:"max_iterations"`
+
+	// ParallelToolCalls enables parallel tool execution.
+	ParallelToolCalls bool `yaml:"parallel-tool-calls" json:"parallel_tool_calls"`
+
+	// MaxConcurrency limits concurrent tool executions.
+	MaxConcurrency int `yaml:"max-concurrency" json:"max_concurrency"`
+
+	// ToolTimeoutMs is the timeout for tool execution in milliseconds.
+	ToolTimeoutMs int `yaml:"tool-timeout-ms" json:"tool_timeout_ms"`
+
+	// AutoExecuteTools executes tools automatically on the server.
+	AutoExecuteTools bool `yaml:"auto-execute-tools" json:"auto_execute_tools"`
+}
+
+// ContextConfig configures context window management.
+type ContextConfig struct {
+	// Enabled controls whether context management is active.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// Strategy is the truncation strategy (sliding-window, priority, summarize).
+	Strategy string `yaml:"strategy" json:"strategy"`
+
+	// ModelLimits maps model names to their context limits.
+	ModelLimits map[string]int64 `yaml:"model-limits,omitempty" json:"model_limits,omitempty"`
+
+	// AlwaysKeep defines what should never be truncated.
+	AlwaysKeep ContextAlwaysKeep `yaml:"always-keep,omitempty" json:"always_keep,omitempty"`
+}
+
+// ContextAlwaysKeep defines what should never be truncated.
+type ContextAlwaysKeep struct {
+	// SystemPrompt keeps the system prompt.
+	SystemPrompt bool `yaml:"system-prompt" json:"system_prompt"`
+
+	// ToolDefinitions keeps tool definitions.
+	ToolDefinitions bool `yaml:"tool-definitions" json:"tool_definitions"`
+
+	// RecentMessages keeps the N most recent messages.
+	RecentMessages int `yaml:"recent-messages" json:"recent_messages"`
+}
+
+// RetryConfig configures retry behavior with exponential backoff.
+type RetryConfig struct {
+	// MaxAttempts is the maximum number of retry attempts.
+	MaxAttempts int `yaml:"max-attempts" json:"max_attempts"`
+
+	// InitialDelayMs is the initial delay between retries in milliseconds.
+	InitialDelayMs int `yaml:"initial-delay-ms" json:"initial_delay_ms"`
+
+	// MaxDelayMs is the maximum delay between retries in milliseconds.
+	MaxDelayMs int `yaml:"max-delay-ms" json:"max_delay_ms"`
+
+	// Multiplier is the backoff multiplier.
+	Multiplier float64 `yaml:"multiplier" json:"multiplier"`
+
+	// Jitter adds randomness to delay (0.0 to 1.0).
+	Jitter float64 `yaml:"jitter" json:"jitter"`
+
+	// RetryableStatusCodes lists HTTP status codes to retry.
+	RetryableStatusCodes []int `yaml:"retryable-status-codes" json:"retryable_status_codes"`
 }

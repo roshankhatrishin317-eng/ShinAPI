@@ -12,31 +12,31 @@ import (
 // LiveMetricsSnapshot represents current live metrics
 type LiveMetricsSnapshot struct {
 	// Rates
-	RPM           int64   `json:"rpm"`            // Requests per minute
-	TPM           int64   `json:"tpm"`            // Tokens per minute
-	TPS           float64 `json:"tps"`            // Transactions per second
-	
+	RPM int64   `json:"rpm"` // Requests per minute
+	TPM int64   `json:"tpm"` // Tokens per minute
+	TPS float64 `json:"tps"` // Transactions per second
+
 	// Totals
 	TotalRequests int64   `json:"total_requests"`
 	TotalTokens   int64   `json:"total_tokens"`
 	TotalSuccess  int64   `json:"total_success"`
 	TotalFailed   int64   `json:"total_failed"`
 	SuccessRate   float64 `json:"success_rate"`
-	
+
 	// Latency stats (ms)
-	AvgLatency    float64 `json:"avg_latency_ms"`
-	P50Latency    float64 `json:"p50_latency_ms"`
-	P95Latency    float64 `json:"p95_latency_ms"`
-	P99Latency    float64 `json:"p99_latency_ms"`
-	
+	AvgLatency float64 `json:"avg_latency_ms"`
+	P50Latency float64 `json:"p50_latency_ms"`
+	P95Latency float64 `json:"p95_latency_ms"`
+	P99Latency float64 `json:"p99_latency_ms"`
+
 	// Uptime
-	UptimeSeconds int64   `json:"uptime_seconds"`
-	
+	UptimeSeconds int64 `json:"uptime_seconds"`
+
 	// Per-model breakdown
-	ModelStats    map[string]ModelMetrics `json:"model_stats"`
-	
+	ModelStats map[string]ModelMetrics `json:"model_stats"`
+
 	// Timestamp
-	Timestamp     int64   `json:"timestamp"`
+	Timestamp int64 `json:"timestamp"`
 }
 
 // ModelMetrics contains per-model statistics
@@ -49,38 +49,43 @@ var serverStartTime = time.Now()
 
 // GetLiveMetrics returns real-time metrics as JSON
 func (h *Handler) GetLiveMetrics(c *gin.Context) {
+	if tracker := GetRealTimeTracker(); tracker != nil {
+		c.JSON(http.StatusOK, tracker.Snapshot())
+		return
+	}
+
 	now := time.Now()
 	oneMinuteAgo := now.Add(-1 * time.Minute)
 	tenSecondsAgo := now.Add(-10 * time.Second)
-	
+
 	snapshot := LiveMetricsSnapshot{
 		Timestamp:     now.Unix(),
 		UptimeSeconds: int64(now.Sub(serverStartTime).Seconds()),
 		ModelStats:    make(map[string]ModelMetrics),
 	}
-	
+
 	if h == nil || h.usageStats == nil {
 		c.JSON(http.StatusOK, snapshot)
 		return
 	}
-	
+
 	usageSnapshot := h.usageStats.Snapshot()
-	
+
 	// Set totals from usage stats
 	snapshot.TotalRequests = usageSnapshot.TotalRequests
 	snapshot.TotalTokens = usageSnapshot.TotalTokens
 	snapshot.TotalSuccess = usageSnapshot.SuccessCount
 	snapshot.TotalFailed = usageSnapshot.FailureCount
-	
+
 	if usageSnapshot.TotalRequests > 0 {
 		snapshot.SuccessRate = float64(usageSnapshot.SuccessCount) / float64(usageSnapshot.TotalRequests) * 100
 	}
-	
+
 	// Calculate RPM, TPM, TPS from request details
 	var requestsLastMinute int64
 	var tokensLastMinute int64
 	var requestsLast10Seconds int64
-	
+
 	for _, apiSnapshot := range usageSnapshot.APIs {
 		for modelName, modelSnapshot := range apiSnapshot.Models {
 			// Update model stats
@@ -95,7 +100,7 @@ func (h *Handler) GetLiveMetrics(c *gin.Context) {
 				existing.Tokens += modelSnapshot.TotalTokens
 				snapshot.ModelStats[modelName] = existing
 			}
-			
+
 			// Count recent requests for RPM/TPS
 			for _, detail := range modelSnapshot.Details {
 				if detail.Timestamp.After(oneMinuteAgo) {
@@ -108,37 +113,37 @@ func (h *Handler) GetLiveMetrics(c *gin.Context) {
 			}
 		}
 	}
-	
+
 	snapshot.RPM = requestsLastMinute
 	snapshot.TPM = tokensLastMinute
 	snapshot.TPS = float64(requestsLast10Seconds) / 10.0
-	
+
 	c.JSON(http.StatusOK, snapshot)
 }
 
 // RealTimeTracker provides real-time request tracking with sub-second granularity
 type RealTimeTracker struct {
 	mu sync.RWMutex
-	
+
 	// Circular buffer for last 60 seconds of request counts
 	requestCounts [60]int64
 	tokenCounts   [60]int64
 	lastSecond    int64
-	
+
 	// Total counters
 	totalRequests int64
 	totalTokens   int64
 	totalSuccess  int64
 	totalFailed   int64
-	
+
 	// Per-model stats
 	modelStats map[string]*modelTracker
-	
+
 	// Latency tracking (last 1000 requests)
 	latencies    []int64 // in milliseconds
 	latencyIndex int
 	latencyMu    sync.Mutex
-	
+
 	startTime time.Time
 }
 
@@ -169,12 +174,12 @@ func (t *RealTimeTracker) Record(model string, tokens int64, latencyMs int64, su
 	if t == nil {
 		return
 	}
-	
+
 	now := time.Now()
 	currentSecond := now.Unix()
-	
+
 	t.mu.Lock()
-	
+
 	// Roll over to new second if needed
 	if currentSecond != t.lastSecond {
 		// Clear seconds between lastSecond and currentSecond
@@ -191,12 +196,12 @@ func (t *RealTimeTracker) Record(model string, tokens int64, latencyMs int64, su
 		}
 		t.lastSecond = currentSecond
 	}
-	
+
 	// Update current second
 	idx := currentSecond % 60
 	t.requestCounts[idx]++
 	t.tokenCounts[idx] += tokens
-	
+
 	// Update totals
 	t.totalRequests++
 	t.totalTokens += tokens
@@ -205,16 +210,16 @@ func (t *RealTimeTracker) Record(model string, tokens int64, latencyMs int64, su
 	} else {
 		t.totalFailed++
 	}
-	
+
 	// Update model stats
 	if t.modelStats[model] == nil {
 		t.modelStats[model] = &modelTracker{}
 	}
 	t.modelStats[model].requests++
 	t.modelStats[model].tokens += tokens
-	
+
 	t.mu.Unlock()
-	
+
 	// Record latency (separate lock to avoid blocking)
 	t.latencyMu.Lock()
 	t.latencies[t.latencyIndex%1000] = latencyMs
@@ -225,20 +230,33 @@ func (t *RealTimeTracker) Record(model string, tokens int64, latencyMs int64, su
 // Snapshot returns current metrics
 func (t *RealTimeTracker) Snapshot() LiveMetricsSnapshot {
 	now := time.Now()
-	currentSecond := now.Unix()
-	
 	snapshot := LiveMetricsSnapshot{
-		Timestamp:     now.Unix(),
-		UptimeSeconds: int64(now.Sub(t.startTime).Seconds()),
-		ModelStats:    make(map[string]ModelMetrics),
+		Timestamp:  now.Unix(),
+		ModelStats: make(map[string]ModelMetrics),
 	}
-	
+
 	if t == nil {
+		snapshot.UptimeSeconds = int64(now.Sub(serverStartTime).Seconds())
 		return snapshot
 	}
-	
-	t.mu.RLock()
-	
+
+	snapshot.UptimeSeconds = int64(now.Sub(t.startTime).Seconds())
+
+	t.mu.Lock()
+	currentSecond := now.Unix()
+	if t.lastSecond > 0 && currentSecond != t.lastSecond {
+		diff := currentSecond - t.lastSecond
+		if diff > 60 {
+			diff = 60
+		}
+		for i := int64(1); i <= diff; i++ {
+			idx := (t.lastSecond + i) % 60
+			t.requestCounts[idx] = 0
+			t.tokenCounts[idx] = 0
+		}
+		t.lastSecond = currentSecond
+	}
+
 	// Calculate RPM (sum of last 60 seconds)
 	var rpm int64
 	var tpm int64
@@ -248,7 +266,7 @@ func (t *RealTimeTracker) Snapshot() LiveMetricsSnapshot {
 	}
 	snapshot.RPM = rpm
 	snapshot.TPM = tpm
-	
+
 	// Calculate TPS (average of last 10 seconds)
 	var tps int64
 	for i := 0; i < 10; i++ {
@@ -256,17 +274,17 @@ func (t *RealTimeTracker) Snapshot() LiveMetricsSnapshot {
 		tps += t.requestCounts[idx]
 	}
 	snapshot.TPS = float64(tps) / 10.0
-	
+
 	// Totals
 	snapshot.TotalRequests = t.totalRequests
 	snapshot.TotalTokens = t.totalTokens
 	snapshot.TotalSuccess = t.totalSuccess
 	snapshot.TotalFailed = t.totalFailed
-	
+
 	if t.totalRequests > 0 {
 		snapshot.SuccessRate = float64(t.totalSuccess) / float64(t.totalRequests) * 100
 	}
-	
+
 	// Model stats
 	for model, stats := range t.modelStats {
 		snapshot.ModelStats[model] = ModelMetrics{
@@ -274,9 +292,9 @@ func (t *RealTimeTracker) Snapshot() LiveMetricsSnapshot {
 			Tokens:   stats.tokens,
 		}
 	}
-	
-	t.mu.RUnlock()
-	
+
+	t.mu.Unlock()
+
 	// Calculate latency percentiles
 	t.latencyMu.Lock()
 	count := t.latencyIndex
@@ -287,11 +305,11 @@ func (t *RealTimeTracker) Snapshot() LiveMetricsSnapshot {
 		latencies := make([]int64, count)
 		copy(latencies, t.latencies[:count])
 		t.latencyMu.Unlock()
-		
+
 		sort.Slice(latencies, func(i, j int) bool {
 			return latencies[i] < latencies[j]
 		})
-		
+
 		var sum int64
 		for _, l := range latencies {
 			sum += l
@@ -307,6 +325,6 @@ func (t *RealTimeTracker) Snapshot() LiveMetricsSnapshot {
 	} else {
 		t.latencyMu.Unlock()
 	}
-	
+
 	return snapshot
 }

@@ -15,9 +15,11 @@ import (
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
 	claudeauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/claude"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/cache"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/translator/reasoning"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
@@ -32,12 +34,37 @@ import (
 // ClaudeExecutor is a stateless executor for Anthropic Claude over the messages API.
 // If api_key is unavailable on auth, it falls back to legacy via ClientAdapter.
 type ClaudeExecutor struct {
-	cfg *config.Config
+	cfg             *config.Config
+	reasoningParser *reasoning.ReasoningParser
+	cacheConfig     cache.AnthropicCacheConfig
 }
 
 const claudeToolPrefix = "proxy_"
 
-func NewClaudeExecutor(cfg *config.Config) *ClaudeExecutor { return &ClaudeExecutor{cfg: cfg} }
+func NewClaudeExecutor(cfg *config.Config) *ClaudeExecutor {
+	// Initialize reasoning parser with default config
+	reasoningCfg := reasoning.ReasoningConfig{
+		ExtractThinking:      true,
+		ShowThinkingToClient: true, // Pass thinking through by default
+		Claude: reasoning.ClaudeReasoningConfig{
+			InterleavedTools: true,
+		},
+	}
+
+	// Initialize prompt cache config
+	cacheConfig := cache.AnthropicCacheConfig{
+		Enabled:          true,
+		MarkSystemPrompt: true,
+		MarkTools:        true,
+		TTL:              300,
+	}
+
+	return &ClaudeExecutor{
+		cfg:             cfg,
+		reasoningParser: reasoning.NewReasoningParser(reasoningCfg),
+		cacheConfig:     cacheConfig,
+	}
+}
 
 func (e *ClaudeExecutor) Identifier() string { return "claude" }
 
@@ -123,6 +150,10 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	// Extract betas from body and convert to header
 	var extraBetas []string
 	extraBetas, body = extractAndRemoveBetas(body)
+
+	// Apply prompt caching for cost optimization
+	body = cache.InsertClaudeCacheControl(body, e.cacheConfig)
+
 	bodyForTranslation := body
 	bodyForUpstream := body
 	if isClaudeOAuthToken(apiKey) {
@@ -198,6 +229,22 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		}
 	} else {
 		reporter.publish(ctx, parseClaudeUsage(data))
+
+		// Extract thinking/reasoning tokens for metrics
+		if e.reasoningParser != nil {
+			thinkingResult := e.reasoningParser.ExtractThinking(data, reasoning.ProviderClaude)
+			if thinkingResult.ThinkingTokens > 0 {
+				log.Debugf("Claude thinking tokens: %d", thinkingResult.ThinkingTokens)
+			}
+		}
+
+		// Track prompt cache usage
+		cacheUsage := cache.GetClaudeCacheUsage(data)
+		if cacheUsage.CacheReadInputTokens > 0 || cacheUsage.CacheCreationInputTokens > 0 {
+			savings := cache.CalculateCacheSavings(cacheUsage)
+			log.Debugf("Claude cache: read=%d, created=%d, savings=%.1f%%",
+				cacheUsage.CacheReadInputTokens, cacheUsage.CacheCreationInputTokens, savings)
+		}
 	}
 	if isClaudeOAuthToken(apiKey) {
 		data = stripClaudeToolPrefixFromResponse(data, claudeToolPrefix)
@@ -252,6 +299,10 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	// Extract betas from body and convert to header
 	var extraBetas []string
 	extraBetas, body = extractAndRemoveBetas(body)
+
+	// Apply prompt caching for cost optimization
+	body = cache.InsertClaudeCacheControl(body, e.cacheConfig)
+
 	bodyForTranslation := body
 	bodyForUpstream := body
 	if isClaudeOAuthToken(apiKey) {

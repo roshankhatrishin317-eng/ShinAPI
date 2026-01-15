@@ -289,7 +289,7 @@ func ConvertOpenAIResponsesRequestToClaude(modelName string, inputRawJSON []byte
 	if tools := root.Get("tools"); tools.Exists() && tools.IsArray() {
 		toolsJSON := "[]"
 		tools.ForEach(func(_, tool gjson.Result) bool {
-			tJSON := `{"name":"","description":"","input_schema":{}}`
+			tJSON := `{"name":"","description":"","input_schema":{"type":"object","properties":{}}}`
 			if n := tool.Get("name"); n.Exists() {
 				tJSON, _ = sjson.Set(tJSON, "name", n.String())
 			}

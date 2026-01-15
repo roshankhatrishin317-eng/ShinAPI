@@ -81,6 +81,18 @@ func (h *OpenAIResponsesAPIHandler) Responses(c *gin.Context) {
 		return
 	}
 
+	agentCfg, cleaned := parseAgenticConfig(rawJSON)
+	rawJSON = cleaned
+	if agentCfg.Enabled {
+		c.JSON(http.StatusBadRequest, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: "agentic mode is not yet supported for /v1/responses",
+				Type:    "invalid_request_error",
+			},
+		})
+		return
+	}
+
 	// Check if the client requested a streaming response.
 	streamResult := gjson.GetBytes(rawJSON, "stream")
 	if streamResult.Type == gjson.True {

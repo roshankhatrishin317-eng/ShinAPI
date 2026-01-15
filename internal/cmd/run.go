@@ -13,7 +13,9 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/cache"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy"
 	log "github.com/sirupsen/logrus"
 )
@@ -140,6 +142,16 @@ func initPerformanceSystem(cfg *config.Config) {
 //   - configPath: The path to the configuration file
 //   - localPassword: Optional password accepted for local management requests
 func StartService(cfg *config.Config, configPath string, localPassword string) {
+	// Initialize optional Zap logger if configured
+	if cfg.UseZapLogger {
+		if err := logging.InitZapLoggerSimple(cfg.Debug); err != nil {
+			log.Warnf("failed to initialize zap logger: %v", err)
+		} else {
+			log.Info("Zap structured logger initialized (high-performance mode)")
+			defer logging.ZapSync()
+		}
+	}
+
 	// Initialize cache system (including Redis if configured)
 	cacheSystem := initCacheSystem(cfg)
 	defer func() {
@@ -147,6 +159,19 @@ func StartService(cfg *config.Config, configPath string, localPassword string) {
 			log.Warnf("failed to close cache system: %v", err)
 		}
 	}()
+
+	// Initialize metrics database if configured
+	if cfg.MetricsDB.Enabled {
+		if err := usage.InitMetricsDB(cfg.MetricsDB); err != nil {
+			log.Warnf("failed to initialize metrics database: %v", err)
+		} else {
+			defer func() {
+				if db := usage.GetMetricsDB(); db != nil {
+					db.Close()
+				}
+			}()
+		}
+	}
 
 	// Initialize performance optimizations (HTTP/2 pooling, stream fanout)
 	initPerformanceSystem(cfg)

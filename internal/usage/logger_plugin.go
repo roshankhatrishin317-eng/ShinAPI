@@ -22,6 +22,8 @@ func init() {
 	coreusage.RegisterPlugin(NewLoggerPlugin())
 }
 
+const maxRequestDetailsPerModel = 500
+
 // LoggerPlugin collects in-memory request statistics for usage analysis.
 // It implements coreusage.Plugin to receive usage records emitted by the runtime.
 type LoggerPlugin struct {
@@ -48,6 +50,18 @@ func (p *LoggerPlugin) HandleUsage(ctx context.Context, record coreusage.Record)
 		return
 	}
 	p.stats.Record(ctx, record)
+
+	// Also record to historical metrics for time-series data
+	detail := normaliseDetail(record.Detail)
+	success := !record.Failed
+	if !success {
+		success = resolveSuccess(ctx)
+	}
+	latencyMs := float64(0)
+	if !record.RequestedAt.IsZero() {
+		latencyMs = float64(time.Since(record.RequestedAt).Milliseconds())
+	}
+	GetHistoricalMetrics().Record(record.Model, detail.InputTokens, detail.OutputTokens, latencyMs, success)
 }
 
 // SetStatisticsEnabled toggles whether in-memory statistics are recorded.
@@ -221,6 +235,9 @@ func (s *RequestStatistics) updateAPIStats(stats *apiStats, model string, detail
 	modelStatsValue.TotalRequests++
 	modelStatsValue.TotalTokens += detail.Tokens.TotalTokens
 	modelStatsValue.Details = append(modelStatsValue.Details, detail)
+	if len(modelStatsValue.Details) > maxRequestDetailsPerModel {
+		modelStatsValue.Details = modelStatsValue.Details[len(modelStatsValue.Details)-maxRequestDetailsPerModel:]
+	}
 }
 
 // Snapshot returns a copy of the aggregated metrics for external consumption.

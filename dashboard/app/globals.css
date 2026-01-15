@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "../styles/animations.css";
 
 @theme {
   --font-family-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -230,4 +231,44 @@ body {
 
 .backface-hidden {
   backface-visibility: hidden;
+}
+
+/* Magic UI Animations */
+@keyframes border-beam {
+  100% {
+    offset-distance: 100%;
+  }
+}
+
+@keyframes shimmer-slide {
+  to {
+    transform: translate(calc(100cqw - 100%), 0);
+  }
+}
+
+@keyframes spin-around {
+  0% {
+    transform: translateZ(0) rotate(0);
+  }
+  15%, 35% {
+    transform: translateZ(0) rotate(90deg);
+  }
+  65%, 85% {
+    transform: translateZ(0) rotate(270deg);
+  }
+  100% {
+    transform: translateZ(0) rotate(360deg);
+  }
+}
+
+.animate-border-beam {
+  animation: border-beam calc(var(--duration)*1s) infinite linear;
+}
+
+.animate-shimmer-slide {
+  animation: shimmer-slide var(--shimmer-duration) infinite;
+}
+
+.animate-spin-around {
+  animation: spin-around calc(var(--shimmer-duration) * 2) infinite linear;
 }

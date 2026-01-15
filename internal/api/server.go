@@ -26,6 +26,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/observability"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
@@ -268,10 +269,26 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	s.localPassword = optionState.localPassword
 
 	// Register metrics hook for real-time TPS and latency tracking
+	// Feeds data to both RealTimeTracker (for dashboard) and PrometheusMetrics (for /metrics endpoint)
+	useOfficialPrometheus := cfg.Observability.Metrics.UseOfficialClient
 	sdkusage.SetMetricsHook(func(model string, tokens int64, latencyMs int64, success bool) {
+		// Feed to RealTimeTracker for dashboard WebSocket/API
 		tracker := managementHandlers.GetRealTimeTracker()
 		if tracker != nil {
 			tracker.Record(model, tokens, latencyMs, success)
+		}
+
+		// Feed to PrometheusMetrics for /metrics endpoint (if official client enabled)
+		if useOfficialPrometheus {
+			promMetrics := observability.GetPrometheusMetrics()
+			if promMetrics != nil {
+				status := "success"
+				if !success {
+					status = "error"
+				}
+				// Convert latency from ms to seconds for Prometheus histogram
+				promMetrics.RecordRequest(model, "proxy", status, float64(latencyMs)/1000.0, tokens)
+			}
 		}
 	})
 
@@ -327,6 +344,26 @@ func (s *Server) setupRoutes() {
 	
 	// WebSocket endpoint for real-time metrics
 	s.engine.GET("/ws/metrics", s.serveMetricsWebSocket)
+
+	// Prometheus metrics endpoint (if enabled in config)
+	if s.cfg.Observability.Metrics.Enabled {
+		obsCfg := observability.ObservabilityConfig{
+			Metrics: observability.MetricsConfig{
+				Enabled:          s.cfg.Observability.Metrics.Enabled,
+				Path:             s.cfg.Observability.Metrics.Path,
+				Namespace:        s.cfg.Observability.Metrics.Namespace,
+				Subsystem:        s.cfg.Observability.Metrics.Subsystem,
+				HistogramBuckets: s.cfg.Observability.Metrics.HistogramBuckets,
+			},
+		}
+		useOfficial := s.cfg.Observability.Metrics.UseOfficialClient
+		observability.RegisterGinRoutesWithOptions(s.engine, obsCfg, useOfficial)
+		if useOfficial {
+			log.Info("Prometheus metrics endpoint enabled with official client (/metrics)")
+		} else {
+			log.Info("Prometheus metrics endpoint enabled with custom collector (/metrics)")
+		}
+	}
 	
 	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)
 	geminiHandlers := gemini.NewGeminiAPIHandler(s.handlers)
@@ -500,6 +537,11 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/usage/export", s.mgmt.ExportUsageStatistics)
 		mgmt.POST("/usage/import", s.mgmt.ImportUsageStatistics)
 		mgmt.GET("/live-metrics", s.mgmt.GetLiveMetrics)
+		mgmt.GET("/metrics/historical", s.mgmt.GetHistoricalMetrics)
+		mgmt.GET("/metrics/tps", s.mgmt.GetTPSMetrics)
+		mgmt.GET("/metrics/tpm", s.mgmt.GetTPMMetrics)
+		mgmt.GET("/metrics/tph", s.mgmt.GetTPHMetrics)
+		mgmt.GET("/metrics/tpd", s.mgmt.GetTPDMetrics)
 		mgmt.GET("/config", s.mgmt.GetConfig)
 		mgmt.GET("/config.yaml", s.mgmt.GetConfigYAML)
 		mgmt.PUT("/config.yaml", s.mgmt.PutConfigYAML)

@@ -14,6 +14,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	contextmgr "github.com/router-for-me/CLIProxyAPI/v6/internal/context"
+	providererrors "github.com/router-for-me/CLIProxyAPI/v6/internal/errors"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
@@ -178,6 +180,12 @@ type BaseAPIHandler struct {
 
 	// Cfg holds the current application configuration.
 	Cfg *config.SDKConfig
+
+	// ContextManager handles context window management and truncation.
+	ContextManager *contextmgr.Manager
+
+	// ErrorHandler handles provider error classification and retry logic.
+	ErrorHandler *providererrors.ErrorHandler
 }
 
 // NewBaseAPIHandlers creates a new API handlers instance.
@@ -190,9 +198,24 @@ type BaseAPIHandler struct {
 // Returns:
 //   - *BaseAPIHandler: A new API handlers instance
 func NewBaseAPIHandlers(cfg *config.SDKConfig, authManager *coreauth.Manager) *BaseAPIHandler {
+	// Initialize context manager with default config
+	ctxCfg := contextmgr.ContextConfig{
+		Strategy: contextmgr.StrategySlidingWindow,
+		AlwaysKeep: contextmgr.AlwaysKeepConfig{
+			SystemPrompt:   true,
+			RecentMessages: 2,
+		},
+	}
+	ctxMgr := contextmgr.NewManager(ctxCfg)
+
+	// Initialize error handler with default retry config
+	errHandler := providererrors.NewErrorHandler(providererrors.DefaultRetryConfig())
+
 	return &BaseAPIHandler{
-		Cfg:         cfg,
-		AuthManager: authManager,
+		Cfg:            cfg,
+		AuthManager:    authManager,
+		ContextManager: ctxMgr,
+		ErrorHandler:   errHandler,
 	}
 }
 
