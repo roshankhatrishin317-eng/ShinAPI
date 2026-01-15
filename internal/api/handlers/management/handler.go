@@ -196,8 +196,8 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 				h.attemptsMu.Unlock()
 			}
 		}
-		if secretHash == "" && envSecret == "" {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "remote management key not set"})
+		if secretHash == "" && envSecret == "" && h.localPassword == "" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "management API not configured"})
 			return
 		}
 

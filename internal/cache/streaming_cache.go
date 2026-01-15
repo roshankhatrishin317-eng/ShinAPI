@@ -5,6 +5,7 @@ package cache
 import (
 	"bytes"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,8 +16,9 @@ type StreamingCache struct {
 	cache    map[string]*streamingEntry
 	capacity int
 	ttl      time.Duration
+	stopCh   chan struct{}
 
-	// Metrics
+	// Metrics (use atomic operations for thread-safe access)
 	hits   uint64
 	misses uint64
 }
@@ -74,6 +76,7 @@ func NewStreamingCache(cfg StreamingCacheConfig) *StreamingCache {
 		cache:    make(map[string]*streamingEntry),
 		capacity: cfg.MaxEntries,
 		ttl:      time.Duration(cfg.TTLSeconds) * time.Second,
+		stopCh:   make(chan struct{}),
 	}
 	go sc.startCleanup()
 	return sc
@@ -171,16 +174,16 @@ func (sc *StreamingCache) Get(key string) ([]StreamEvent, bool) {
 
 	entry, exists := sc.cache[key]
 	if !exists {
-		sc.misses++
+		atomic.AddUint64(&sc.misses, 1)
 		return nil, false
 	}
 
 	if time.Now().After(entry.expiresAt) {
-		sc.misses++
+		atomic.AddUint64(&sc.misses, 1)
 		return nil, false
 	}
 
-	sc.hits++
+	atomic.AddUint64(&sc.hits, 1)
 	events := make([]StreamEvent, len(entry.events))
 	copy(events, entry.events)
 	return events, true
@@ -230,18 +233,20 @@ func (sc *StreamingCache) Stats() StreamingCacheStats {
 		totalSize += entry.totalSize
 	}
 
-	total := sc.hits + sc.misses
+	hits := atomic.LoadUint64(&sc.hits)
+	misses := atomic.LoadUint64(&sc.misses)
+	total := hits + misses
 	var hitRate float64
 	if total > 0 {
-		hitRate = float64(sc.hits) / float64(total) * 100
+		hitRate = float64(hits) / float64(total) * 100
 	}
 
 	return StreamingCacheStats{
 		Entries:     len(sc.cache),
 		TotalEvents: totalEvents,
 		TotalSize:   totalSize,
-		Hits:        sc.hits,
-		Misses:      sc.misses,
+		Hits:        hits,
+		Misses:      misses,
 		HitRate:     hitRate,
 	}
 }
@@ -265,9 +270,19 @@ func (sc *StreamingCache) evictOldest() {
 func (sc *StreamingCache) startCleanup() {
 	ticker := time.NewTicker(sc.ttl / 2)
 	defer ticker.Stop()
-	for range ticker.C {
-		sc.purgeExpired()
+	for {
+		select {
+		case <-ticker.C:
+			sc.purgeExpired()
+		case <-sc.stopCh:
+			return
+		}
 	}
+}
+
+// Close stops the cleanup goroutine and releases resources.
+func (sc *StreamingCache) Close() {
+	close(sc.stopCh)
 }
 
 func (sc *StreamingCache) purgeExpired() {

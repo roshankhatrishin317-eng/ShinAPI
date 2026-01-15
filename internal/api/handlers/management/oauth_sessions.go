@@ -254,6 +254,10 @@ func WriteOAuthCallbackFile(authDir, provider, state, code, errorMessage string)
 		return "", err
 	}
 
+	if err := os.MkdirAll(authDir, 0o755); err != nil {
+		return "", fmt.Errorf("create auth dir: %w", err)
+	}
+
 	fileName := fmt.Sprintf(".oauth-%s-%s.oauth", canonicalProvider, state)
 	filePath := filepath.Join(authDir, fileName)
 	payload := oauthCallbackFilePayload{

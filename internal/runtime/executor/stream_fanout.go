@@ -157,8 +157,13 @@ func (sf *StreamFanout) cleanupLoop() {
 }
 
 func (sf *StreamFanout) cleanup() {
+	// Copy stream references to avoid nested locking
 	sf.mu.Lock()
-	defer sf.mu.Unlock()
+	toCheck := make(map[string]*SharedStream, len(sf.streams))
+	for k, v := range sf.streams {
+		toCheck[k] = v
+	}
+	sf.mu.Unlock()
 
 	now := time.Now()
 	dedupWindow := time.Duration(sf.config.DedupWindowSeconds) * time.Second
@@ -166,16 +171,25 @@ func (sf *StreamFanout) cleanup() {
 		dedupWindow = 5 * time.Second
 	}
 
-	for key, stream := range sf.streams {
+	var toDelete []string
+	for key, stream := range toCheck {
 		stream.mu.RLock()
 		isStale := stream.completed && now.Sub(stream.lastEventAt) > dedupWindow
 		noSubscribers := len(stream.subscribers) == 0 && now.Sub(stream.createdAt) > dedupWindow
 		stream.mu.RUnlock()
 
 		if isStale || noSubscribers {
-			delete(sf.streams, key)
-			log.Debugf("stream fanout: cleaned up stream %s (stale=%v, no_subs=%v)", key, isStale, noSubscribers)
+			toDelete = append(toDelete, key)
 		}
+	}
+
+	if len(toDelete) > 0 {
+		sf.mu.Lock()
+		for _, key := range toDelete {
+			delete(sf.streams, key)
+			log.Debugf("stream fanout: cleaned up stream %s", key)
+		}
+		sf.mu.Unlock()
 	}
 }
 

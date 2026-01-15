@@ -17,6 +17,7 @@ type LRUCache struct {
 	ttl      time.Duration
 	items    map[string]*list.Element
 	order    *list.List
+	stopCh   chan struct{}
 
 	// Metrics
 	hits   uint64
@@ -42,6 +43,7 @@ func NewLRUCache(capacity int, ttl time.Duration) *LRUCache {
 		ttl:      ttl,
 		items:    make(map[string]*list.Element),
 		order:    list.New(),
+		stopCh:   make(chan struct{}),
 	}
 	go c.startCleanup()
 	return c
@@ -166,9 +168,19 @@ func (c *LRUCache) removeOldest() {
 func (c *LRUCache) startCleanup() {
 	ticker := time.NewTicker(c.ttl / 2)
 	defer ticker.Stop()
-	for range ticker.C {
-		c.purgeExpired()
+	for {
+		select {
+		case <-ticker.C:
+			c.purgeExpired()
+		case <-c.stopCh:
+			return
+		}
 	}
+}
+
+// Close stops the cleanup goroutine and releases resources.
+func (c *LRUCache) Close() {
+	close(c.stopCh)
 }
 
 func (c *LRUCache) purgeExpired() {

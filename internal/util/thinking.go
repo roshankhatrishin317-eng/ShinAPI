@@ -222,17 +222,17 @@ func ThinkingBudgetToEffort(model string, budget int) (string, bool) {
 	case budget == -1:
 		return "auto", true
 	case budget < -1:
-		return "", false
+		return "", false // Invalid negative budget
 	case budget == 0:
 		if levels := GetModelThinkingLevels(model); len(levels) > 0 {
 			return levels[0], true
 		}
 		return "none", true
-	case budget > 0 && budget <= 1024:
+	case budget >= 1 && budget <= 1024:
 		return "low", true
-	case budget <= 8192:
+	case budget >= 1025 && budget <= 8192:
 		return "medium", true
-	case budget <= 24576:
+	case budget >= 8193 && budget <= 24576:
 		return "high", true
 	case budget > 24576:
 		if levels := GetModelThinkingLevels(model); len(levels) > 0 {

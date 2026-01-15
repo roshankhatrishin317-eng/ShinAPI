@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,7 +20,8 @@ type SemanticCache struct {
 	cache    *LRUCache
 	index    map[string][]semanticEntry // normalized hash -> list of similar entries
 	config   SemanticCacheConfig
-	
+	stopCh   chan struct{}
+
 	// Metrics
 	semanticHits   uint64
 	semanticMisses uint64
@@ -83,6 +85,7 @@ func NewSemanticCache(cfg SemanticCacheConfig) *SemanticCache {
 		cache:  NewLRUCache(cfg.MaxEntries, time.Duration(cfg.TTLSeconds)*time.Second),
 		index:  make(map[string][]semanticEntry),
 		config: cfg,
+		stopCh: make(chan struct{}),
 	}
 	go sc.startCleanup()
 	return sc
@@ -298,9 +301,20 @@ func (sc *SemanticCache) Clear() {
 func (sc *SemanticCache) startCleanup() {
 	ticker := time.NewTicker(time.Duration(sc.config.TTLSeconds/2) * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		sc.purgeExpired()
+	for {
+		select {
+		case <-ticker.C:
+			sc.purgeExpired()
+		case <-sc.stopCh:
+			return
+		}
 	}
+}
+
+// Close stops the cleanup goroutine and releases resources.
+func (sc *SemanticCache) Close() {
+	close(sc.stopCh)
+	sc.cache.Close()
 }
 
 func (sc *SemanticCache) purgeExpired() {
@@ -426,11 +440,10 @@ func GenerateCacheKey(cfg CacheKeyConfig, model, systemPrompt, userPrompt string
 		parts = append(parts, "user:"+userPrompt)
 	}
 	if cfg.IncludeTemperature {
-		parts = append(parts, "temp:"+strings.TrimRight(strings.TrimRight(
-			strings.Replace(string(rune(int(temperature*1000))), ".", "", 1), "0"), "."))
+		parts = append(parts, "temp:"+strconv.FormatFloat(temperature, 'f', 3, 64))
 	}
 	if cfg.IncludeMaxTokens && maxTokens > 0 {
-		parts = append(parts, "max:"+string(rune(maxTokens)))
+		parts = append(parts, "max:"+strconv.Itoa(maxTokens))
 	}
 	if cfg.IncludeTools && len(tools) > 0 {
 		sort.Strings(tools)

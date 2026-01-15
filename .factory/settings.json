@@ -94,7 +94,7 @@
     {
       "model": "gemini-3-pro-preview",
       "displayName": "gemini-3-pro-preview",
-      "baseUrl": "http://127.0.0.1:8317/v1",
+      "baseUrl": "https://shinapi.fly.dev/v1",
       "apiKey": "shin",
       "provider": "generic-chat-completion-api"
     },

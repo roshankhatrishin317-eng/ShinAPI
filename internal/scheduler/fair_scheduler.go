@@ -18,6 +18,7 @@ type FairScheduler struct {
 	weights       map[string]int
 	defaultWeight int
 	maxQueueSize  int
+	maxConcurrent int
 	metrics       *SchedulerMetrics
 
 	// Virtual time for fair scheduling
@@ -82,6 +83,7 @@ func NewFairScheduler(cfg SchedulerConfig) *FairScheduler {
 		weights:       make(map[string]int),
 		defaultWeight: cfg.DefaultWeight,
 		maxQueueSize:  cfg.MaxQueueSize,
+		maxConcurrent: cfg.MaxConcurrent,
 		metrics:       NewSchedulerMetrics(),
 		stopCh:        make(chan struct{}),
 	}
@@ -278,6 +280,9 @@ func (fs *FairScheduler) RunWorker(ctx context.Context) {
 func (fs *FairScheduler) Start(ctx context.Context, workers int) {
 	if workers <= 0 {
 		workers = 1
+	}
+	if fs.maxConcurrent > 0 && workers > fs.maxConcurrent {
+		workers = fs.maxConcurrent
 	}
 	for i := 0; i < workers; i++ {
 		go fs.RunWorker(ctx)

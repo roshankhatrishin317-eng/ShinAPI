@@ -4,6 +4,8 @@ package reasoning
 import (
 	"regexp"
 	"strings"
+
+	"github.com/tidwall/gjson"
 )
 
 // DeepSeek R1 thinking format:
@@ -83,49 +85,14 @@ func StripDeepSeekThinking(content []byte) string {
 // ExtractDeepSeekThinkingFromResponse extracts thinking from a full OpenAI-format response.
 func ExtractDeepSeekThinkingFromResponse(response []byte) ThinkingResult {
 	// DeepSeek uses OpenAI-compatible format
-	// The thinking is embedded in the content
-	contentStr := string(response)
-	
-	// Find content field in JSON
-	// Simple extraction - look for "content": "..."
-	contentStart := strings.Index(contentStr, `"content":"`)
-	if contentStart == -1 {
-		contentStart = strings.Index(contentStr, `"content": "`)
+	// Try multiple paths for content extraction using gjson
+	content := gjson.GetBytes(response, "choices.0.message.content").String()
+	if content == "" {
+		content = gjson.GetBytes(response, "choices.0.delta.content").String()
 	}
-	if contentStart == -1 {
+	if content == "" {
 		return ThinkingResult{}
 	}
-
-	// Find the content value
-	contentStart = strings.Index(contentStr[contentStart:], `"`) + contentStart + 1
-	contentStart = strings.Index(contentStr[contentStart:], `"`) + contentStart + 1
-	
-	contentEnd := contentStart
-	escaped := false
-	for i := contentStart; i < len(contentStr); i++ {
-		if escaped {
-			escaped = false
-			continue
-		}
-		if contentStr[i] == '\\' {
-			escaped = true
-			continue
-		}
-		if contentStr[i] == '"' {
-			contentEnd = i
-			break
-		}
-	}
-
-	if contentEnd <= contentStart {
-		return ThinkingResult{}
-	}
-
-	content := contentStr[contentStart:contentEnd]
-	// Unescape the content
-	content = strings.ReplaceAll(content, `\n`, "\n")
-	content = strings.ReplaceAll(content, `\"`, `"`)
-	content = strings.ReplaceAll(content, `\\`, `\`)
 
 	return ExtractDeepSeekThinking([]byte(content))
 }

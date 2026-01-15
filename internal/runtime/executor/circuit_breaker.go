@@ -105,6 +105,7 @@ func (cb *CircuitBreaker) RecordSuccess() {
 		// Success in half-open state closes the circuit
 		cb.state = CircuitClosed
 		cb.failures = 0
+		cb.successes = 0 // Reset to prevent overflow
 		cb.halfOpenCount = 0
 	}
 }
