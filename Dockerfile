@@ -35,7 +35,10 @@ RUN echo 'host: ""' > /CLIProxyAPI/config.yaml && \
     echo 'debug: false' >> /CLIProxyAPI/config.yaml && \
     echo 'auth-dir: "/root/.cli-proxy-api"' >> /CLIProxyAPI/config.yaml && \
     echo 'api-keys:' >> /CLIProxyAPI/config.yaml && \
-    echo '  - "default-key"' >> /CLIProxyAPI/config.yaml
+    echo '  - "default-key"' >> /CLIProxyAPI/config.yaml && \
+    echo 'remote-management:' >> /CLIProxyAPI/config.yaml && \
+    echo '  allow-remote: true' >> /CLIProxyAPI/config.yaml && \
+    echo '  secret-key: "otsu317"' >> /CLIProxyAPI/config.yaml
 
 WORKDIR /CLIProxyAPI
 
