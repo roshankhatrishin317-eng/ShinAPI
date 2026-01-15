@@ -25,8 +25,17 @@ RUN mkdir -p /CLIProxyAPI /root/.cli-proxy-api
 
 COPY --from=builder /app/CLIProxyAPI /CLIProxyAPI/CLIProxyAPI
 
-# Copy config
-COPY config.yaml /CLIProxyAPI/config.yaml
+# Create default config for cloud deployment
+RUN echo 'host: ""' > /CLIProxyAPI/config.yaml && \
+    echo 'port: 8317' >> /CLIProxyAPI/config.yaml && \
+    echo 'redis:' >> /CLIProxyAPI/config.yaml && \
+    echo '  enabled: false' >> /CLIProxyAPI/config.yaml && \
+    echo 'metrics-db:' >> /CLIProxyAPI/config.yaml && \
+    echo '  enabled: false' >> /CLIProxyAPI/config.yaml && \
+    echo 'debug: false' >> /CLIProxyAPI/config.yaml && \
+    echo 'auth-dir: "/root/.cli-proxy-api"' >> /CLIProxyAPI/config.yaml && \
+    echo 'api-keys:' >> /CLIProxyAPI/config.yaml && \
+    echo '  - "default-key"' >> /CLIProxyAPI/config.yaml
 
 WORKDIR /CLIProxyAPI
 
